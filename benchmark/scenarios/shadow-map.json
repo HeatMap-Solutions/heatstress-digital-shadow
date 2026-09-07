@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "method": "POST",
+  "service": "qgis",
+  "session": false,
+  "excludes": "Container startup, data preparation, output validation, report generation, and browser/WMS rendering.",
+  "expected_outputs": [
+    "shadow-maps/hillshade_20150701_1500.tif"
+  ],
+  "id": "shadow-map",
+  "title": "Shadow map calculation",
+  "description": "Existing standalone hillshade calculation using the current DSM and fixed application date/time.",
+  "boundary": "QGIS /shadow/map submission through response; one time step only.",
+  "endpoint": "/shadow/map",
+  "inputs": [
+    "dsm.TIF"
+  ],
+  "payload": {
+    "dem_path": "/data/dsm.TIF",
+    "start_dt": "2015-07-01T15:00:00",
+    "end_dt": "2015-07-01T15:00:00"
+  }
+}
