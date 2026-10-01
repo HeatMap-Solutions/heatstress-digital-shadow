@@ -46,6 +46,12 @@ requirements, every scenario, generated files, comparisons, and troubleshooting.
    also produces a comparison report if more than one attempt was collected.
    Keep background workload comparable and compare only runs on your own machine.
 
+By default, only logs and lightweight evidence are saved; generated maps are
+validated before disposable data is removed. Add `--save-maps` to a `run` command
+to retain every generated file. Use it for both sets of runs when you need later
+pixel-by-pixel comparisons. It can retain about 1.2 GB per old full-area tree run.
+`--keep-work` is a separate debugging option that also keeps bulky working copies.
+
 ## Find your results
 
 Run folders already include **both date and time**, in UTC:

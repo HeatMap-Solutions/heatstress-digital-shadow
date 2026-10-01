@@ -426,7 +426,7 @@ def initialize_run(definition, label):
     return root, run
 
 
-def collect(work, root, before, output_prefix="outputs"):
+def collect(work, root, before, output_prefix="outputs", save_maps=False):
     artifacts = []
     if not work.exists():
         return artifacts
@@ -440,11 +440,17 @@ def collect(work, root, before, output_prefix="outputs"):
         if old and old["sha256"] == h and old["mtime_ns"] == p.stat().st_mtime_ns:
             continue
         dst = root / output_prefix / relative
-        dst.parent.mkdir(parents=True, exist_ok=True)
         size = p.stat().st_size
-        shutil.copyfile(p, dst)
+        # Default retention is bounded text evidence, never GIS map data.
+        retained = save_maps or (
+            p.suffix.lower() in {".json", ".csv", ".txt", ".log", ".xml"}
+            and size <= 1024 * 1024
+        )
+        if retained:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(p, dst)
         artifacts.append(
-            {"path": output_prefix + "/" + relative, "bytes": size, "sha256": h}
+            {"path": output_prefix + "/" + relative, "bytes": size, "sha256": h, "retained": retained}
         )
     save(root / "artifacts.json", artifacts)
     return artifacts
@@ -452,6 +458,7 @@ def collect(work, root, before, output_prefix="outputs"):
 
 def execute(definition, label, args):
     root, run = initialize_run(definition, label)
+    run["artifact_retention"] = "all" if args.save_maps else "lightweight"
     print(f"Run: {root}", flush=True)
     prefix = "hsbench-" + uuid.uuid4().hex[:10]
     network = prefix + "-net"
@@ -605,12 +612,13 @@ def execute(definition, label, args):
                     f"Container shutdown/log collection failed: {exc}"
                 )
         try:
-            artifacts = collect(work, root, before)
+            artifacts = collect(work, root, before, save_maps=args.save_maps)
             artifacts += collect(
-                work.parent / "tmp", root, {}, "outputs/container-temporary"
+                work.parent / "tmp", root, {}, "outputs/container-temporary", save_maps=args.save_maps
             )
             save(root / "artifacts.json", artifacts)
-            run["artifact_bytes"] = sum(p["bytes"] for p in artifacts)
+            run["generated_artifact_bytes"] = sum(p["bytes"] for p in artifacts)
+            run["artifact_bytes"] = sum(p["bytes"] for p in artifacts if p["retained"])
             if request_started and qgis in created:
                 validation_name = prefix + "-validate"
                 try:
@@ -631,12 +639,15 @@ def execute(definition, label, args):
                         f"type=bind,src={TOOL},dst=/bench,readonly",
                         "--mount",
                         f"type=bind,src={root},dst=/results",
+                        "--mount",
+                        f"type=bind,src={work},dst=/generated,readonly",
                         run["environment"]["qgis"]["image"],
                         "/bench/probe.py",
                         "validate",
-                        "/results/outputs",
+                        "/generated",
                         "/results/scenario.json",
                         "/results/validation.json",
+                        "/results/artifacts.json",
                         timeout=180,
                     )
                 finally:
@@ -745,6 +756,13 @@ def compare_rasters(paths, destination):
         )
         if not raster:
             continue
+        if not (Path(path) / "outputs" / raster).is_file():
+            results.append({
+                "run": run["run_id"], "scenario": scenario,
+                "status": "unavailable",
+                "reason": "Final map was not retained; rerun with --save-maps for numerical comparisons",
+            })
+            continue
         if scenario not in baseline:
             baseline[scenario] = (path, run, raster)
             continue
@@ -818,7 +836,10 @@ def main():
     r.add_argument("--label", default="baseline")
     r.add_argument("--data", type=Path, default=ROOT / "data")
     r.add_argument("--timeout", type=float, default=1200)
-    r.add_argument("--keep-work", action="store_true")
+    r.add_argument("--save-maps", action="store_true",
+                   help="Retain all generated files, including maps and intermediate GIS data")
+    r.add_argument("--keep-work", action="store_true",
+                   help="Keep disposable working data for debugging (may be several GB)")
     c = sub.add_parser("compare")
     c.add_argument("runs", nargs="+")
     c.add_argument("--name", default="comparison")

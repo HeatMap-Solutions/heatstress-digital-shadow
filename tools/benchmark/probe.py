@@ -155,10 +155,13 @@ def raster_summary(path):
     }
 
 
-def validate(root, patterns):
+def validate(root, patterns, generated_paths=None):
     checks = []
     for pattern in patterns:
         matches = sorted(Path(root).glob(pattern))
+        if generated_paths is not None:
+            matches = [path for path in matches
+                       if path.relative_to(root).as_posix() in generated_paths]
         if not matches:
             checks.append(
                 {
@@ -299,11 +302,18 @@ if __name__ == "__main__":
         root, definition, output = a.args
         save(output, inspect_data(root, json.loads(Path(definition).read_text())))
     elif a.action == "validate":
-        root, definition, output = a.args
+        root, definition, output = a.args[:3]
+        generated_paths = None
+        if len(a.args) > 3:
+            generated_paths = {
+                item["path"][len("outputs/"):]
+                for item in json.loads(Path(a.args[3]).read_text())
+                if item["path"].startswith("outputs/")
+            }
         save(
             output,
             validate(
-                root, json.loads(Path(definition).read_text())["expected_outputs"]
+                root, json.loads(Path(definition).read_text())["expected_outputs"], generated_paths
             ),
         )
     else:

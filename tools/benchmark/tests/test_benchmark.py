@@ -99,12 +99,57 @@ class BenchmarkTests(unittest.TestCase):
                 }
             }
             (work / "new.tif").write_bytes(b"generated")
-            artifacts = bench.collect(work, root, before)
+            artifacts = bench.collect(work, root, before, save_maps=True)
             self.assertEqual([a["path"] for a in artifacts], ["outputs/new.tif"])
             self.assertEqual(source.read_bytes(), b"original")
             source.write_bytes(b"changed")
-            bench.collect(work, root, before)
+            bench.collect(work, root, before, save_maps=True)
             self.assertEqual((root / "outputs/input.tif").read_bytes(), b"changed")
+
+    def test_lightweight_collection_inventories_maps_without_saving_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / ".work/data"
+            work.mkdir(parents=True)
+            (work / "map.tif").write_bytes(b"map")
+            (work / "points.gpkg").write_bytes(b"points")
+            (work / "settings.json").write_text('{"value": 1}')
+            (work / "large.log").write_bytes(b"x" * (1024 * 1024 + 1))
+            artifacts = bench.collect(work, root, {})
+            retained = {a["path"] for a in artifacts if a["retained"]}
+            self.assertEqual(retained, {"outputs/settings.json"})
+            self.assertFalse((root / "outputs/map.tif").exists())
+            self.assertFalse((root / "outputs/points.gpkg").exists())
+            self.assertFalse((root / "outputs/large.log").exists())
+            self.assertEqual((work / "map.tif").read_bytes(), b"map")
+            self.assertEqual(len(artifacts), 4)
+            self.assertTrue(all(a["sha256"] for a in artifacts))
+
+    def test_missing_retained_maps_reports_unavailable_without_docker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = root / "run"
+            run.mkdir()
+            probe.save(run / "run.json", record())
+            probe.save(run / "validation.json", {"checks": [
+                {"path": "final.tif", "ok": True, "raster": {"size": [1, 1]}}
+            ]})
+            destination = root / "comparison"
+            report.comparison_report([run], destination)
+            with patch.object(bench, "docker") as docker:
+                bench.compare_rasters([run], destination)
+            docker.assert_not_called()
+            result = json.loads((destination / "raster_differences.json").read_text())[0]
+            self.assertEqual(result["status"], "unavailable")
+            self.assertIn("--save-maps", result["reason"])
+
+    def test_validation_excludes_unchanged_source_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old.json").write_text('{"old": true}')
+            result = probe.validate(root, ["old.json"], generated_paths=set())
+            self.assertFalse(result["ok"])
+            self.assertIn("No newly generated", result["checks"][0]["reason"])
 
     def test_input_identity_detects_content_change_and_missing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,7 +187,7 @@ class BenchmarkTests(unittest.TestCase):
                 "excludes": "Setup",
                 "expected_outputs": ["out.tif"],
             }
-            args = SimpleNamespace(data=data, keep_work=False, timeout=1)
+            args = SimpleNamespace(data=data, keep_work=False, save_maps=False, timeout=1)
             code = {"application_source_fingerprint": "x"}
             with patch.object(bench, "BENCH", root / "benchmark"), patch.object(
                 bench, "runtime", return_value={}
@@ -174,7 +219,7 @@ class BenchmarkTests(unittest.TestCase):
                 "excludes": "Setup",
                 "expected_outputs": ["out.tif"],
             }
-            args = SimpleNamespace(data=data, keep_work=False, timeout=1)
+            args = SimpleNamespace(data=data, keep_work=False, save_maps=False, timeout=1)
             with patch.object(bench, "BENCH", root / "benchmark"), patch.object(
                 bench, "code_record", side_effect=KeyboardInterrupt
             ), patch.object(bench, "machine_id", return_value="test"):
