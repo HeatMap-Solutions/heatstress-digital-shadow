@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "method": "POST",
+  "service": "backend",
+  "session": true,
+  "excludes": "Container startup, data preparation, output validation, report generation, and browser/WMS rendering.",
+  "expected_outputs": [
+    "server/sessions/*/pet_*_filled.tif",
+    "server/sessions/*/map.qgz"
+  ],
+  "id": "one-tree-grid-comparison",
+  "title": "PET recalculation \u2014 1 tree",
+  "description": "Existing tree-update calculation with 1 fixed placement. Ten-tree case is distributed across Middelburg, not a clustered planting scheme. Common inputs expanded with grid and baseline PET for comparable before/after local-grid benchmarks.",
+  "boundary": "Backend /update-pet submission through full response, including its QGIS call and session-project update. Session creation is outside timing.",
+  "endpoint": "/update-pet",
+  "inputs": [
+    "dsm.TIF",
+    "raster/br-reproject.tif",
+    "raster/svf-reproject-filled.tif",
+    "uhi/sun-bbox.tif",
+    "uhi/shadow-pet.tif",
+    "server/starting-map.qgz",
+    "server/styles/new-default.qml",
+    "server/wind-speed-calc.geojson",
+    "server/pet-version-1.tif"
+  ],
+  "payload": {
+    "points": [
+      {
+        "x": 31740,
+        "y": 391420,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      }
+    ]
+  },
+  "placement_review": {
+    "approved": "2026-09-07",
+    "crs": "EPSG:28992",
+    "source": "Existing DSM and Bowen raster samples; valid flat pavement-classified footprints",
+    "preview": "tree-locations.png"
+  }
+}

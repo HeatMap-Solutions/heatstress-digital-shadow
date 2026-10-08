@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import shutil
 import tempfile
@@ -15,6 +16,7 @@ def update_pet_layer_in_project(
     new_raster_path: str,
     base_name: str,
     style_path: str = "/data/server/styles/new-default.qml",
+    scenario_state: dict | None = None,
 ) -> None:
     """
     Add (or replace) a 'pet-session-updated' layer in the QGIS project (.qgz)
@@ -36,6 +38,8 @@ def update_pet_layer_in_project(
         qgs_name = next(n for n in all_names if n.endswith(".qgs"))
         qgs_bytes = z.read(qgs_name)
         other_files = {n: z.read(n) for n in all_names if n != qgs_name}
+    if scenario_state is not None:
+        other_files['pet-scenario.json'] = json.dumps(scenario_state, sort_keys=True).encode('utf-8')
 
     root = ET.fromstring(qgs_bytes.decode("utf-8"))
 
