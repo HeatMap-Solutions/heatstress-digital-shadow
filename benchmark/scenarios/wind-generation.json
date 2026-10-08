@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "method": "POST",
+  "service": "qgis",
+  "session": false,
+  "excludes": "Container startup, data preparation, output validation, report generation, and browser/WMS rendering.",
+  "expected_outputs": [
+    "wind/benchmark-output/run_*/height.tif",
+    "wind/benchmark-output/run_*/wind-grid.gpkg",
+    "wind/benchmark-output/run_*/run-settings.json"
+  ],
+  "id": "wind-generation",
+  "title": "Standalone wind-reduction pipeline",
+  "description": "Existing wind pipeline; independent of PET. Includes live external building/tree downloads when inputs exist.",
+  "boundary": "QGIS /wind/generate-wind-reduction-map submission through response. Upstream manual work and PET generation are excluded.",
+  "endpoint": "/wind/generate-wind-reduction-map",
+  "inputs": [
+    "wind/DSM-0.5.tiff",
+    "wind/DTM-0.5.tiff"
+  ],
+  "payload": {
+    "dsm_path": "/data/wind/DSM-0.5.tiff",
+    "dtm_path": "/data/wind/DTM-0.5.tiff",
+    "output_dir": "/data/wind/benchmark-output",
+    "wind_direction": "west"
+  }
+}

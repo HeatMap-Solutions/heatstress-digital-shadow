@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "method": "POST",
+  "service": "backend",
+  "session": true,
+  "excludes": "Container startup, data preparation, output validation, report generation, and browser/WMS rendering.",
+  "expected_outputs": [
+    "server/sessions/*/pet_*_filled.tif",
+    "server/sessions/*/map.qgz"
+  ],
+  "id": "ten-trees",
+  "title": "PET recalculation \u2014 10 trees",
+  "description": "Existing tree-update calculation with 10 fixed placements. Ten-tree case is distributed across Middelburg, not a clustered planting scheme.",
+  "boundary": "Backend /update-pet submission through full response, including its QGIS call and session-project update. Session creation is outside timing.",
+  "endpoint": "/update-pet",
+  "inputs": [
+    "dsm.TIF",
+    "raster/br-reproject.tif",
+    "raster/svf-reproject-filled.tif",
+    "uhi/sun-bbox.tif",
+    "uhi/shadow-pet.tif",
+    "server/starting-map.qgz",
+    "server/styles/new-default.qml"
+  ],
+  "payload": {
+    "points": [
+      {
+        "x": 31740,
+        "y": 391420,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 31680,
+        "y": 391200,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 31500,
+        "y": 391100,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 31400,
+        "y": 391720,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 31760,
+        "y": 392060,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 32420,
+        "y": 391200,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 32000,
+        "y": 392100,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 32060,
+        "y": 392100,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 32500,
+        "y": 391420,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      },
+      {
+        "x": 32500,
+        "y": 391400,
+        "height": 15,
+        "radius": 5,
+        "geometry": "circle"
+      }
+    ]
+  },
+  "placement_review": {
+    "approved": "2026-09-07",
+    "crs": "EPSG:28992",
+    "source": "Existing DSM and Bowen raster samples; valid flat pavement-classified footprints",
+    "preview": "tree-locations.png"
+  }
+}

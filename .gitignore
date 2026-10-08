@@ -1,2 +1,8 @@
 .DS_Store
 backend/.DS_Store
+
+# Generated benchmark evidence and Python caches (scenario definitions stay tracked)
+/benchmark/runs/
+/benchmark/comparisons/
+/benchmark/.lock
+/tools/benchmark/**/__pycache__/

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "method": "GET",
+  "service": "qgis",
+  "session": false,
+  "excludes": "Container startup, data preparation, output validation, report generation, and browser/WMS rendering.",
+  "expected_outputs": [
+    "pet/pet.tif"
+  ],
+  "id": "pet-generation",
+  "title": "PET generation from prepared inputs",
+  "description": "Existing PET generation endpoint; upstream source-map preparation is excluded.",
+  "boundary": "QGIS HTTP request submission through full response. No internal stage instrumentation.",
+  "endpoint": "/pet/full-map-generation",
+  "inputs": [
+    "dsm.TIF",
+    "json/wind_reduction copy.geojson",
+    "raster/vegetation-reproject.tif",
+    "raster/svf-reproject.tif",
+    "raster/br-reproject.tif"
+  ],
+  "wind_field": {
+    "file": "json/wind_reduction copy.geojson",
+    "required": "u_1_2"
+  }
+}
