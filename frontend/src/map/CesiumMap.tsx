@@ -56,7 +56,7 @@ type Props = {
 
 // Home button position and default view rectangle are set to cover Zeeland by default, but can be adjusted as needed.
 Camera.DEFAULT_VIEW_RECTANGLE = Rectangle.fromDegrees(
-	3.58, // west
+	3.5, // west (includes Vlissingen)
 	51.36, // south
 	3.97, // east
 	51.6, // north

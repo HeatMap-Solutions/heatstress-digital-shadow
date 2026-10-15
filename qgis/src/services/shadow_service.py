@@ -1,5 +1,6 @@
 from datetime import timedelta
 from src.utils.solar_position import get_solar_position
+from src.configs.area import load_area
 from qgis.core import QgsApplication, QgsProcessingFeedback
 import os
 
@@ -9,10 +10,11 @@ class ShadowService:
         from processing.algs.gdal.GdalAlgorithmProvider import GdalAlgorithmProvider
 
         input_tif = input_path
+        area_name = load_area().name
         current_dt = start_dt
         out_path = ''
         while current_dt <= end_dt:
-            az, alt = get_solar_position(lat, lon, "Middelburg", "Netherlands", "Europe/Amsterdam", current_dt)
+            az, alt = get_solar_position(lat, lon, area_name, "Netherlands", "Europe/Amsterdam", current_dt)
             print(f"{current_dt}: Azimuth={az:.2f}, Altitude={alt:.2f}")
 
             hour_str = current_dt.strftime("%Y%m%d_%H%M")

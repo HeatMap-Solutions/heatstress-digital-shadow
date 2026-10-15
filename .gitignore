@@ -1,2 +1,6 @@
 .DS_Store
 backend/.DS_Store
+
+# Area data folders made by qgis/tools/prepare_area.py, and their raw downloads
+data-*/
+sources/

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from src.api.requests.placed_objects_request import PlacedObjectsRequest
 from src.utils.update_qgis_project import update_pet_layer_in_project
 from typing import Optional
+from src.configs.area import load_area
 
 router = APIRouter()
 pet_service = PETService()
@@ -55,7 +56,8 @@ def get_uhi_zone():
     )
 
     output_folder = "/data/shadow-maps"
-    lat, lon = 51.498, 3.613
+    area = load_area()
+    lat, lon = area.lat, area.lon
     start_dt = datetime(2015, 7, 1, 15, 0, 0)
     end_dt = datetime(2015, 7, 1, 15, 0, 0)
 
@@ -98,7 +100,8 @@ def burn_point_to_raster(req: PlacedObjectsRequest, session_id: Optional[str] = 
     )
 
     output_folder = "/data/shadow-maps"
-    lat, lon = 51.498, 3.613
+    area = load_area()
+    lat, lon = area.lat, area.lon
     start_dt = datetime(2015, 7, 1, 15, 0, 0)
     end_dt = datetime(2015, 7, 1, 15, 0, 0)
 
@@ -125,4 +128,4 @@ def burn_point_to_raster(req: PlacedObjectsRequest, session_id: Optional[str] = 
         "message": f"Burned {len(req.points)} point(s) into raster.",
         "params": {"points": [p.model_dump() for p in req.points]},
         "output": pet_raster,
-    }
+    }
