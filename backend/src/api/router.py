@@ -109,5 +109,5 @@ async def read_3dbag_by_coordinates(
     )
 
 @api_router.get('/legend')
-async def get_map_legend():
-    return legend_controller.get_legend()
+async def get_map_legend(layer: str = 'pet-version-1'):
+    return legend_controller.get_legend(layer)

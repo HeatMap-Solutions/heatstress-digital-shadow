@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { buildGetFeatureInfoUrl } from './wmsUtils';
 
 export interface PetFeatureInfo {
@@ -31,16 +31,28 @@ function isFeatureCollection(value: unknown): value is QgisFeatureCollection {
 type Config = {
 	baseUrl: string;
 	layerName: string;
+	valueField?: string;
 };
 
 export function useQgisFeatureInfo(config: Config) {
 	const [featureInfo, setFeatureInfo] = useState<PetFeatureInfo | null>(null);
 
-	function clear() {
+	const activeRequest = useRef(0);
+	const clear = useCallback(() => {
+		activeRequest.current += 1;
 		setFeatureInfo(null);
-	}
+	}, []);
+
+	useEffect(() => {
+		clear();
+		return () => { activeRequest.current += 1; };
+	}, [config.baseUrl, config.layerName, config.valueField, clear]);
 
 	async function request(lon: number, lat: number): Promise<void> {
+		const requestId = ++activeRequest.current;
+		const publish = (value: PetFeatureInfo | null) => {
+			if (requestId === activeRequest.current) setFeatureInfo(value);
+		};
 		const url = buildGetFeatureInfoUrl({
 			baseUrl: config.baseUrl,
 			layerName: config.layerName,
@@ -52,24 +64,25 @@ export function useQgisFeatureInfo(config: Config) {
 		try {
 			const res = await fetch(url);
 			if (!res.ok) {
-				setFeatureInfo(null);
+				publish(null);
 				return;
 			}
 			json = await res.json();
 		} catch {
-			setFeatureInfo(null);
+			publish(null);
 			return;
 		}
 
 		if (!isFeatureCollection(json)) {
-			setFeatureInfo(null);
+			publish(null);
 			return;
 		}
 
 		const firstFeature = json.features[0];
 		const properties: Record<string, unknown> = firstFeature?.properties ?? {};
 
-		const rawBand = properties['Band 1'] ?? properties['band_1'] ?? null;
+		const rawBand = config.valueField ? properties[config.valueField] :
+			properties['Band 1'] ?? properties['band_1'] ?? null;
 
 		let band: number | null = null;
 
@@ -82,7 +95,7 @@ export function useQgisFeatureInfo(config: Config) {
 			}
 		}
 
-		setFeatureInfo({ lon, lat, band });
+		publish({ lon, lat, band });
 	}
 
 	return { featureInfo, request, clear };

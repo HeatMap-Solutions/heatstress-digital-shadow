@@ -11,6 +11,7 @@ type HeatStressMeasuresProps = {
 	onSelectObjectType: (type: MeasureType | null) => void;
 	hasUnsavedChanges: boolean;
 	isProcessing: boolean;
+	saveError?: string;
 	onSave: (objects: ObjectInstance[]) => void;
 	onDiscard: () => void;
 	currentObjects: ObjectInstance[];
@@ -25,6 +26,7 @@ export function HeatStressMeasuresPanel({
 	onSelectObjectType,
 	hasUnsavedChanges,
 	isProcessing,
+	saveError,
 	onSave,
 	onDiscard,
 	currentObjects,
@@ -101,6 +103,12 @@ export function HeatStressMeasuresPanel({
 						Save
 					</button>
 				</div>
+
+				{saveError && (
+					<p role="alert" style={{ color: '#9f1239', background: '#fff1f2', padding: 10 }}>
+						Save failed: {saveError} Your changes are still unsaved.
+					</p>
+				)}
 
 				<ObjectIOControls
 					objects={currentObjects}

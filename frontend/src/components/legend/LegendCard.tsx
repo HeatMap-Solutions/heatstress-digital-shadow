@@ -23,10 +23,11 @@ function formatValue(value: number): string {
 export const LegendCard = ({ legend, title = 'Legend' }: LegendCardProps) => {
 	const items = legend.color_ramp.items ?? [];
 	const sortedItems = [...items].sort((a, b) => a.value - b.value);
-	const gradientColors = sortedItems.map((item) => parseRgba(item.color)).join(', ');
-
 	const minValue = legend.renderer.classification_min;
 	const maxValue = legend.renderer.classification_max;
+	const gradientColors = sortedItems.map((item) =>
+		`${parseRgba(item.color)} ${(item.value - minValue) / (maxValue - minValue || 1) * 100}%`).join(', ');
+	const discrete = legend.renderer.type === 'graduatedSymbol';
 	const midValue = (minValue + maxValue) / 2;
 	const gradientWidth = '200px';
 
@@ -47,6 +48,12 @@ export const LegendCard = ({ legend, title = 'Legend' }: LegendCardProps) => {
 			}}
 		>
 			<div style={{ fontSize: '13px', fontWeight: 700, textAlign: 'center' }}>{title}</div>
+			{discrete ? sortedItems.map((item) => (
+				<div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+					<span style={{ width: 16, height: 12, background: parseRgba(item.color) }} />
+					<span>{item.label ?? formatValue(item.value)}</span>
+				</div>
+			)) : (
 			<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
 				<div
 					style={{
@@ -75,6 +82,7 @@ export const LegendCard = ({ legend, title = 'Legend' }: LegendCardProps) => {
 					<div>{formatValue(maxValue)}</div>
 				</div>
 			</div>
+			)}
 		</div>
 	);
 };

@@ -1,5 +1,5 @@
 import type { QgisLayerId } from '../../features/wms-overlay/lib/qgisLayers';
-import { QGIS_OVERLAY_LAYERS } from '../../features/wms-overlay/lib/qgisLayers';
+import { QGIS_OVERLAY_LAYERS, REGION_NAME, PET_RESOLUTION } from '../../features/wms-overlay/lib/qgisLayers';
 import CheckboxItem from './items/CheckboxItem';
 
 export type OverlayLayerConfig = {
@@ -226,13 +226,11 @@ export function OverlayLayersPanel({
 			<hr style={{ border: 'none', borderTop: '1px solid #e5e5e5', margin: '16px 0 12px' }} />
 			<p style={sectionLabelStyle}>About this data</p>
 			<p style={infoTextStyle}>
-				The perceived temperature (PET) has been calculated for every outdoor location for
-				the period between 12:00 and 18:00. July 1, 2015 was chosen as a representative
-				tropical day (RIVM, 2019). A maximum temperature of 33.1&nbsp;°C was measured in De
-				Bilt on that day. The measured air temperature, solar radiation, and humidity from
-				that day in De Bilt were used to calculate the perceived temperature across the
-				Netherlands. Additionally, a near-calm wind situation was assumed for the entire
-				Netherlands.
+				This experimental {REGION_NAME} map ({PET_RESOLUTION} m output grid) uses the existing fixed weather and PET formulas.
+				Unavailable pedestrian wind uses a provisional 7.5 m/s fallback. Water and
+				unresolved source pixels are excluded from PET. The diagnostic layers show its
+				regional inputs; vegetation is an LGN2018 land-use proxy. UHI uses July 1, 2017 at
+				18:00 and hillshade uses July 1, 2015 at 15:00. Scientific validation is pending.
 			</p>
 		</div>
 	);

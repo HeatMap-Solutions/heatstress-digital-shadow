@@ -1,6 +1,8 @@
 import os
 import shutil
 import tempfile
+import math
+from osgeo import gdal
 from qgis.core import QgsProcessingFeedback
 from src.utils.layer_utils import load_raster_layer
 from src.utils.grid_utils import (
@@ -33,6 +35,22 @@ class GridService:
      4. Normalise buildings_height_mean: values below the threshold are raised to the minimum.
      5. Normalise trees_height_mean:     values below the threshold are raised to the minimum.
     """
+
+    @staticmethod
+    def frontal_side_formula(count_field, objects_field, aspect_path):
+        """Pixel counts represent area; account for the actual metre grid."""
+        raster = gdal.Open(str(aspect_path))
+        if raster is None:
+            raise ValueError('Cannot read directional raster pixel area')
+        t = raster.GetGeoTransform()
+        if t[2] != 0 or t[4] != 0:
+            raise ValueError('Wind directional rasters must use a north-up grid')
+        area = abs(t[1]*t[5])
+        if not math.isfinite(area) or area <= 0:
+            raise ValueError('Invalid directional raster pixel area')
+        # Exact old expression for the default 1 m workflow.
+        correction = '' if area == 1 else f' * {area}'
+        return f'sqrt("{count_field}" * "{objects_field}"{correction})'
 
     def create_grid_with_zonal_stats(
         self,
@@ -169,7 +187,7 @@ class GridService:
             norm_layer = calculate_field(
                 input_layer=norm_layer,
                 field_name="fa_t_side",
-                formula='sqrt("trees_frontal_count" * "tree_count")',
+                formula=self.frontal_side_formula('trees_frontal_count','tree_count',trees_aspect_path),
                 output_path=grid_tree_frontal_side_area_path,
             )
             
@@ -177,7 +195,7 @@ class GridService:
             norm_layer = calculate_field(
                 input_layer=norm_layer,
                 field_name="fa_b_side",
-                formula='sqrt("buildings_frontal_count" * "building_count")',
+                formula=self.frontal_side_formula('buildings_frontal_count','building_count',buildings_aspect_path),
                 output_path=grid_building_frontal_side_area_path,
             )
 

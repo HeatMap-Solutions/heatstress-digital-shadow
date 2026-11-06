@@ -20,9 +20,8 @@ def _copy_and_fix_qgz(src: str, dst: str) -> None:
     Sessions sit two levels deeper (data/server/sessions/{id}/map.qgz), so
     those same files need to be referenced as ../../pet-version-kapelle.tif.
 
-    This function rewrites every <datasource>./ occurrence to <datasource>../../
-    inside the embedded .qgs file so the session map works without any manual
-    path juggling.
+    Resolve each relative datasource against the source project, then store it
+    relative to the session project. Preserve GeoPackage provider URI suffixes.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(src, 'r') as z:
@@ -34,7 +33,12 @@ def _copy_and_fix_qgz(src: str, dst: str) -> None:
                     fpath = os.path.join(root, fname)
                     with open(fpath, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    content = content.replace('<datasource>./', '<datasource>../../')
+                    def relocate(match):
+                        path, separator, options = match.group(2).partition('|')
+                        absolute = os.path.abspath(os.path.join(os.path.dirname(src),path))
+                        relative = os.path.relpath(absolute,os.path.dirname(dst))
+                        return match.group(1)+relative+separator+options+match.group(3)
+                    content = re.sub(r'(<datasource>)(\.\.?/[^<]*)(</datasource>)',relocate,content)
                     with open(fpath, 'w', encoding='utf-8') as f:
                         f.write(content)
 

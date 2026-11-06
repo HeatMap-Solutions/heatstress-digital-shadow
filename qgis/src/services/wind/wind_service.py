@@ -148,7 +148,8 @@ class WindService:
         height_result = self.height.create_height_map(
             dsm_input_path=dsm_path,
             dtm_input_path=dtm_path,
-            corrected_height_output_path=height_path
+            corrected_height_output_path=height_path,
+            raster_resolution=raster_resolution
         )
         results["height_map"] = height_result
         

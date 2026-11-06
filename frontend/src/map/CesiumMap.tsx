@@ -1,3 +1,4 @@
+import { REGION_NAME, REGION_VIEW } from '../features/wms-overlay/lib/qgisLayers';
 import {
 	type ReactNode,
 	forwardRef,
@@ -56,17 +57,17 @@ type Props = {
 
 // Home button position and default view rectangle are set to cover Zeeland by default, but can be adjusted as needed.
 Camera.DEFAULT_VIEW_RECTANGLE = Rectangle.fromDegrees(
-	3.58, // west
-	51.36, // south
-	3.97, // east
-	51.6, // north
+	REGION_VIEW?.[0] ?? (REGION_NAME === 'Zeeland' ? 3.30 : 3.35), // west
+	REGION_VIEW?.[1] ?? (REGION_NAME === 'Zeeland' ? 51.19 : 51.39), // south
+	REGION_VIEW?.[2] ?? (REGION_NAME === 'Zeeland' ? 4.28 : 3.78), // east
+	REGION_VIEW?.[3] ?? (REGION_NAME === 'Zeeland' ? 51.79 : 51.68), // north
 );
 Camera.DEFAULT_VIEW_FACTOR = 0.05;
 
-// Zeeland overview
-const INITIAL_LON = 3.83;
-const INITIAL_LAT = 50.45;
-const INITIAL_HEIGHT = 100000;
+// Walcheren pilot overview
+const INITIAL_LON = REGION_VIEW ? (REGION_VIEW[0] + REGION_VIEW[2]) / 2 : (REGION_NAME === 'Zeeland' ? 3.79 : 3.565);
+const INITIAL_LAT = REGION_VIEW ? (REGION_VIEW[1] + REGION_VIEW[3]) / 2 : (REGION_NAME === 'Zeeland' ? 51.49 : 51.535);
+const INITIAL_HEIGHT = REGION_VIEW?.[4] ?? (REGION_NAME === 'Zeeland' ? 115000 : 42000);
 const PITCH_3D = CesiumMath.toRadians(-45); // tilted perspective
 const PITCH_2D = CesiumMath.toRadians(-90); // straight down
 
@@ -75,7 +76,7 @@ const CesiumMap = forwardRef<CesiumMapHandle, Props>(function CesiumMap(
 	ref,
 ) {
 	const viewerRef = useRef<{ cesiumElement: import('cesium').Viewer } | null>(null);
-	const [isPerspective, setIsPerspective] = useState(true);
+	const [isPerspective, setIsPerspective] = useState(false);
 	const [initialFlyDone, setInitialFlyDone] = useState(false);
 	// World terrain gives Cesium real ground elevations so 3D BAG buildings
 	// (which are positioned at absolute NAP heights) sit on the correct surface.
@@ -321,7 +322,7 @@ const CesiumMap = forwardRef<CesiumMapHandle, Props>(function CesiumMap(
 							INITIAL_LAT,
 							INITIAL_HEIGHT,
 						)}
-						orientation={{ heading: 0, pitch: PITCH_3D, roll: 0 }}
+						orientation={{ heading: 0, pitch: PITCH_2D, roll: 0 }}
 						onComplete={() => setInitialFlyDone(true)}
 					/>
 				)}

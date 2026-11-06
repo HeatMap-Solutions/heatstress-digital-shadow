@@ -12,4 +12,4 @@ export const WIND_DIRECTION_OPTIONS: Array<{
 	{ value: 'south', label: 'From South' },
 ];
 
-export const WIND_API_BASE = 'http://localhost:9000/wind';
+export const WIND_API_BASE = '/qgis-api/wind';

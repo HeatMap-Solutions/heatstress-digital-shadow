@@ -118,12 +118,14 @@ export function useUserObjectsLayer(
 
 	const saveObjects = useCallback(async (objectsToSave: ObjectInstance[]) => {
 		setIsProcessing(true);
+		setError(null);
 		try {
 			const payload = {
 				points: objectsToSave.map((obj) => {
 					const [lon, lat] = obj.position;
 					const [x, y] = lonLatToRd(lon, lat);
 					return {
+						id: obj.id,
 						x,
 						y,
 						height: obj.height ?? 0.4,
@@ -140,7 +142,10 @@ export function useUserObjectsLayer(
 			});
 
 			if (!response.ok) {
-				throw new Error(`Failed to update pet: ${response.status} ${response.statusText}`);
+				const body = await response.json().catch(() => null);
+				const detail = typeof body?.detail === 'string' ? body.detail : body?.detail?.detail;
+				throw new Error(typeof detail === 'string' ? detail :
+					`Failed to update PET: ${response.status} ${response.statusText}`);
 			}
 
 			await Promise.resolve().then(() => {
@@ -174,6 +179,7 @@ export function useUserObjectsLayer(
 
 	const discardChanges = useCallback(() => {
 		setObjectsToSave(userObjects);
+		setError(null);
 	}, [userObjects]);
 
 	return {

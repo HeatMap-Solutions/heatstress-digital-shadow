@@ -23,6 +23,6 @@ class WMSController(AbstractServerController):
 
         return await self.get_resource(
             request_data=wms_request,
-            session_id=session_id,
+            session_id=session_id or "starting-map",
             path="wms"
         )

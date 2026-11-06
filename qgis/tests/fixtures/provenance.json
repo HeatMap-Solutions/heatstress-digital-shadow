@@ -1,0 +1,13 @@
+{
+  "revision": "7393948e2b9709726e983ebd0a37b3fd1fd6b824",
+  "source_sha256": {
+    "raster_service": "59e8474230a03369935ae2eb68d7e5f08f609251e7e11dd6cfa2130d9bea4541",
+    "pet_service": "72d6fae855d64c6ef699f76c66121cd28cd0b80421b46cdd6e6083010770f05d",
+    "shadow_service": "775cf46a2f6728cd48a5905373f37dbe5e7cdacc23dac737f0c2e36218b46ffa"
+  },
+  "snapshot_sha256": {
+    "baseline-active-False.npz": "7b9e9c4d4792f6188382410ae674bb3f74fcdb5e127908637fcbe9fc02f37646",
+    "baseline-False.npz": "6f892d7a97663288c8b94644887de35023642cb0bc703fcf248c5130411a9818",
+    "baseline-True.npz": "801dd10580f11e4e30bb80edef1b07cd8208c511746360300a5cf922d6c20958"
+  }
+}

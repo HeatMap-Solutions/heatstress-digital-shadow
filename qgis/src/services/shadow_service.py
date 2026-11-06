@@ -4,9 +4,8 @@ from qgis.core import QgsApplication, QgsProcessingFeedback
 import os
 
 class ShadowService:
-    def generate_hillshade_maps(self, input_path, output_folder, lat, lon, start_dt, end_dt) -> str:
+    def generate_hillshade_maps(self, input_path, output_folder, lat, lon, start_dt, end_dt, tiled_output=False) -> str:
         import processing
-        from processing.algs.gdal.GdalAlgorithmProvider import GdalAlgorithmProvider
 
         input_tif = input_path
         current_dt = start_dt
@@ -28,6 +27,8 @@ class ShadowService:
                 "OUTPUT": out_path,
             }
             feedback = QgsProcessingFeedback()
+            if tiled_output:
+                params['OPTIONS'] = 'TILED=YES|COMPRESS=DEFLATE|PREDICTOR=2|BIGTIFF=IF_SAFER'
             processing.run("gdal:hillshade", params, feedback=feedback)
             print(f"Hillshade saved: {out_path}")
 

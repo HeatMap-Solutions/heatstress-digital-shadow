@@ -81,6 +81,7 @@ export default function App() {
 		hasUnsavedChanges,
 		objectsVersion,
 		isProcessing,
+		error: saveError,
 		handleImport,
 	} = useUserObjectsLayer(showObjects, isEditingMode, selectedObjectType, setSelectedObjectType);
 
@@ -186,6 +187,7 @@ export default function App() {
 					onSelectObjectType={handleSelectObjectType}
 					hasUnsavedChanges={hasUnsavedChanges}
 					isProcessing={isProcessing}
+					saveError={saveError?.message}
 					onSave={saveObjects}
 					onDiscard={discardChanges}
 					currentObjects={objectsToSave}

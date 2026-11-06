@@ -1,2 +1,15 @@
 .DS_Store
 backend/.DS_Store
+/data/
+/.agent-notes/
+/AGENTS.md
+/AGENTS.override.md
+/docs/CLIENT_BRIEF.md
+/docs/Known_Issuess.md
+/backend/.env
+/frontend/.env
+**/__pycache__/
+/frontend/node_modules
+/frontend/dist/
+/frontend/*.tsbuildinfo
+/.env

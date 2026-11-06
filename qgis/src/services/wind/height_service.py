@@ -16,6 +16,7 @@ class HeightService:
         corrected_height_output_path: str,
         dsm_name: str = "DSM-0.5",
         dtm_name: str = "DTM-0.5",
+        raster_resolution: float = 1.0,
     ) -> dict:
         """
         Create corrected height map from DSM and DTM layers.
@@ -44,20 +45,23 @@ class HeightService:
         dsm_warped_path = self.raster_service.adjust_raster_pixel_resolution(
             input_raster=dsm_input_path,
             target_layer_obj=dsm_layer,
-            resampled_output_path=dsm_warped_temp
+            resampled_output_path=dsm_warped_temp,
+            target_resolution=raster_resolution
         )
         
         # Warp DTM to target resolution
         self.raster_service.adjust_raster_pixel_resolution(
             input_raster=dtm_input_path,
             target_layer_obj=dtm_layer,
-            resampled_output_path=dtm_warped_temp
+            resampled_output_path=dtm_warped_temp,
+            target_resolution=raster_resolution
         )
         
         # Fill DTM NoData: GDAL interpolation for building gaps
         self.raster_service.fill_nodata_gdal(
             input_raster_path=dtm_warped_temp,
-            output_path=dtm_filled_temp1
+            output_path=dtm_filled_temp1,
+            distance=10/raster_resolution
         )
         
         # Fill DTM NoData: Zero fill for remaining gaps (water bodies)
