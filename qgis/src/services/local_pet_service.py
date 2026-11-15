@@ -28,7 +28,7 @@ STATE_FILE = 'pet-scenario.json'
 ALGORITHM_VERSION = 1
 # FillNoData searches 10 PET pixels; allow extra context for hillshade and
 # nearest-neighbour resampling. Regression tests compare buffered vs full runs.
-HALO_PIXELS = 16
+PROCESSING_BUFFER_METERS = 16
 
 
 @dataclass(frozen=True)
@@ -233,8 +233,8 @@ class LocalPETService:
             for key in changed & snapshot.keys():
                 p = snapshot[key]
                 # Reject giant footprints rather than silently calculating beyond
-                # the agreed one-cell neighbourhood. Also allow the fill halo.
-                if max(p['radius']+0.3, 3)+HALO_PIXELS >= min(grid.width, grid.height):
+                # the agreed one-cell neighbourhood. Include the processing buffer.
+                if max(p['radius']+0.3, 3) + PROCESSING_BUFFER_METERS >= min(grid.width, grid.height):
                     raise ValueError('Object radius exceeds the supported 3 x 3 neighbourhood')
                 if not (coverage.left <= p['x'] < coverage.right and coverage.bottom < p['y'] <= coverage.top):
                     raise ValueError('Object is outside calculation raster coverage')
@@ -252,7 +252,7 @@ class LocalPETService:
             with tempfile.TemporaryDirectory(prefix='pet-work-', dir=project.parent) as temporary:
                 for index, region in enumerate(regions):
                     core = region.intersect(coverage)
-                    bounds = core.expand(HALO_PIXELS).intersect(coverage)
+                    bounds = core.expand(PROCESSING_BUFFER_METERS).intersect(coverage)
                     patch, measured = self.calculate_region(bounds, current, Path(temporary)/str(index), layouts)
                     for key, seconds in measured.items():
                         timings[key] = timings.get(key, 0)+seconds

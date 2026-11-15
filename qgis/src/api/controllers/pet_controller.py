@@ -77,5 +77,5 @@ def get_uhi_zone():
 
 
 @router.post("/update")
-def burn_point_to_raster(req: PlacedObjectsRequest, session_id: Optional[str] = None):
+def update_pet_scenario(req: PlacedObjectsRequest, session_id: Optional[str] = None):
     return LocalPETService().update(req.points, session_id)
