@@ -15,7 +15,7 @@ from src.configs.preflight import init_qgis
 from src.utils.pet_tiles import build_vrt
 
 SERVER = Path('/data/server')
-STYLE = SERVER/'heatstress-style.qml'
+STYLE = SERVER/'styles'/'new-default.qml'
 
 
 def main(vrt):

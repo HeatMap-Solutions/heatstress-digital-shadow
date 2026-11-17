@@ -16,7 +16,7 @@ OVERVIEW_LEVELS = [2, 4, 8, 16]
 def build_overviews(tile):
     """Internal overviews per tile: GDAL uses them when the VRT is read zoomed out."""
     ds = gdal.Open(str(tile), gdal.GA_Update)
-    if ds.BuildOverviews('AVERAGE', OVERVIEW_LEVELS) != 0:
+    if ds.BuildOverviews('NEAREST', OVERVIEW_LEVELS) != 0:
         raise RuntimeError(f'Could not build overviews for {tile}')
     ds = None
 

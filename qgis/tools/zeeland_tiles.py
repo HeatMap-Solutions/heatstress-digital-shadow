@@ -42,6 +42,8 @@ ORIGIN_X, ORIGIN_Y = 2000, 427350   # NW of Zeeland, so tile numbers are positiv
 WIND_PLACEHOLDER = 7.5          # geschaalde_u_1_2 (m/s): placeholder until the wind team delivers
 PAVED = [18, 19, 24, 25, 26, 27]  # LGN2018 classes treated as paved
 WATER = [16, 17]                  # LGN2018 water classes, masked out
+BOWEN_SOURCE = os.environ.get('BOWEN_SOURCE')            # optional prepared 1 m raster (e.g. bowen_zeeland_lgn2018_1m.tif) instead of the LGN rule
+VEGETATION_SOURCE = os.environ.get('VEGETATION_SOURCE')  # optional prepared 1 m raster (e.g. vegetation_zeeland_lgn2018_1m.tif) instead of the LGN rule
 
 # Defaults from main's /pet/full-map-generation and pet_service.py
 T_MIN, T_MAX, AVERAGE_WIND = 27.2, 29.1, 7.5
@@ -194,8 +196,14 @@ def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     classes = warp(f'/vsizip/{SOURCE}/sources/lgn2018/LGN2018.zip/LGN2018/LGN2018.tif', work, resolution, 'near', gdal.GDT_Int16)
     land = np.isfinite(classes) & (classes > 0)
     paved = np.isin(classes, PAVED)
-    bowen = np.where(land, np.where(paved, 3.0, 0.4), np.nan).astype('float32')        # same rule as the 2 m run
-    vegetation = np.where(land, np.where(paved, 0.0, 1.0), np.nan).astype('float32')
+    if BOWEN_SOURCE:
+        bowen = np.where(land, warp(BOWEN_SOURCE, work, resolution, 'near'), np.nan).astype('float32')
+    else:
+        bowen = np.where(land, np.where(paved, 3.0, 0.4), np.nan).astype('float32')        # same rule as the 2 m run
+    if VEGETATION_SOURCE:
+        vegetation = np.where(land, warp(VEGETATION_SOURCE, work, resolution, 'average'), np.nan).astype('float32')
+    else:
+        vegetation = np.where(land, np.where(paved, 0.0, 1.0), np.nan).astype('float32')
     svf_raw = warp(svf_source, work, resolution, 'average')
     svf = fill_nodata(svf_raw, work, resolution, distance_px=max(1, round(10/resolution)))  # 10 m search
     dsm = warp(SOURCE/'acquisition-20261005/elevation-dsm/native.vrt', work, dsm_resolution, 'average')
@@ -211,8 +219,8 @@ def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     # Keep only the tile (drop the halo) and mask what is not supported land in Zeeland.
     hx, hy = round(CELL_W/resolution), round(CELL_H/resolution)
     core = (slice(hy, pet.shape[0]-hy), slice(hx, pet.shape[1]-hx))
-    keep = (boundary_mask(boundary_layer, tile, resolution) & land[core] & ~np.isin(classes[core], WATER)
-            & np.isfinite(pet[core]) & (svf[core] >= 0) & (svf[core] <= 1))
+    keep = (boundary_mask(boundary_layer, tile, resolution) & land[core]
+        & np.isfinite(pet[core]) & (svf[core] >= 0) & (svf[core] <= 1))  
     result = np.where(keep, pet[core], np.nan).astype('float32')
     partial = path.with_name(path.stem + '.partial.tif')
     ds = to_gdal(result, tile, resolution, path=partial, options=TILE_OPTIONS)
