@@ -10,6 +10,7 @@ from src.api.models import Point
 import shutil
 import math
 import random
+import hashlib
 
 class RasterService:
     def validate_layer(self, layer: QgsRasterLayer, path: str, layer_type: str) -> None:
@@ -77,7 +78,8 @@ class RasterService:
         buffer_distance = 3,
         output_path: str | None = None,
         height: float = 0.4,
-        sameHeight: bool = False
+        sameHeight: bool = False,
+        workspace: str | None = None,
     ) -> str:
         import processing
 
@@ -101,7 +103,7 @@ class RasterService:
             pr.addFeature(feat)
         vl.updateExtents()
 
-        buffer_layer_path = os.path.join(tempfile.gettempdir(), "buffered_point.gpkg")
+        buffer_layer_path = os.path.join(workspace or tempfile.gettempdir(), "buffered_point.gpkg")
         self.buffer_vector_layer(vl, buffer_distance, buffer_layer_path)
 
         if output_path:
@@ -473,6 +475,8 @@ class RasterService:
         density: int = 250,
         jitter: float = 0.3,
         output_path: str | None = None,
+        workspace: str | None = None,
+        stable_foliage: bool = False,
     ):
         import processing
 
@@ -485,7 +489,9 @@ class RasterService:
         # Add clustered leaf points
         for pt in points:
             pointRadius = pt.radius if pt.radius != None else radius
-            leafs = self._generate_leaf_points(pt.x, pt.y, pointRadius, density, jitter)
+            # Local updates must reproduce an existing tree when another edit overlaps it.
+            rng = random.Random(int.from_bytes(hashlib.sha256(pt.id.encode()).digest(), 'big')) if stable_foliage else random
+            leafs = self._generate_leaf_points(pt.x, pt.y, pointRadius, density, jitter, rng)
             for (px, py) in leafs:
                 feat = QgsFeature()
                 feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(px, py)))
@@ -496,7 +502,7 @@ class RasterService:
         vl.updateExtents()
 
         # Save to temporary gpkg
-        tmpdir = tempfile.gettempdir()
+        tmpdir = workspace or tempfile.gettempdir()
         gpkg_path = os.path.join(tmpdir, "leaf_clouds.gpkg")
         QgsVectorFileWriter.writeAsVectorFormat(vl, gpkg_path, "utf-8", vl.crs(), "GPKG")
 
@@ -555,16 +561,17 @@ class RasterService:
 
         return aspect_raster
 
-    def _generate_leaf_points(self, x, y, radius, density, jitter):
+    def _generate_leaf_points(self, x, y, radius, density, jitter, rng=None):
+        rng = rng or random
         pts = []
         for _ in range(density):
             # radius distribution
-            r = radius * math.sqrt(random.random())
-            ang = random.random() * 2 * math.pi
+            r = radius * math.sqrt(rng.random())
+            ang = rng.random() * 2 * math.pi
 
             # Apply jitter and coordinates
-            px = x + math.cos(ang) * r + random.uniform(-jitter, jitter)
-            py = y + math.sin(ang) * r + random.uniform(-jitter, jitter)
+            px = x + math.cos(ang) * r + rng.uniform(-jitter, jitter)
+            py = y + math.sin(ang) * r + rng.uniform(-jitter, jitter)
             
             pts.append((px, py))
         return pts
