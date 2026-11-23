@@ -124,6 +124,7 @@ export function useUserObjectsLayer(
 					const [lon, lat] = obj.position;
 					const [x, y] = lonLatToRd(lon, lat);
 					return {
+						id: obj.id,
 						x,
 						y,
 						height: obj.height ?? 0.4,
