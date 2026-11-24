@@ -81,7 +81,8 @@ def tiles_values(x, y):
     svf = zt.fill_nodata(svf_raw, work, RES, distance_px=10)
     dsm = zt.warp(zt.SOURCE/'acquisition-20261005/elevation-dsm/native.vrt', work, RES/2, 'average')
 
-    sun_partial, shadow_partial, t_a = zt.zonal_partial_pet(vegetation, svf_raw, RES)
+    u_cells = zt.wind_cells(work, RES)
+    sun_partial, shadow_partial, t_a = zt.zonal_partial_pet(vegetation, svf_raw, RES, u_cells)
     sun_pet = sun_partial + 0.546*bowen + 1.94*svf
     shadow_pet = shadow_partial + 0.015*svf*zt.Q_DIFF + 0.0060*(1-svf)*zt.BOLTZMANN*((t_a+273.15)**4)
     shade = zt.hillshade(dsm, work, RES/2, RES)
@@ -93,7 +94,7 @@ def tiles_values(x, y):
         'cell svf_mean': float(zt.cell_means(svf_raw, RES)[cy, cx]),
         'cell veg_mean': float(zt.cell_means(vegetation, RES)[cy, cx]),
         't_a (cell)': float(t_a[py, px]),
-        'wind u (placeholder)': zt.WIND_PLACEHOLDER,
+        'wind u (placeholder)': float(u_cells[cy, cx]),
         'sun partial (cell)': float(sun_partial[py, px]),
         'shadow partial': float(shadow_partial[py, px]),
         'svf (filled)': float(svf[py, px]),
@@ -127,7 +128,7 @@ def main():
     print(f'\n{"":24}{"Middelburg":>12}{"Tiles":>12}')
     for key in MIDDELBURG:
         print(f'  {key:22}{show(sample(MIDDELBURG[key], x, y)):>12}{show(tiles.get(key, "-")):>12}')
-    for key in ('cell svf_mean', 'cell veg_mean', 'wind u (placeholder)', 'LGN class'):
+    for key in ('cell svf_mean', 'cell veg_mean', 'wind u (placeholder)', 'LGN class'):   # wind u = real wind if WIND_SOURCE is set
         print(f'  {key:22}{"":>12}{show(tiles[key]):>12}')
 
 

@@ -44,6 +44,9 @@ PAVED = [18, 19, 24, 25, 26, 27]  # LGN2018 classes treated as paved
 WATER = [16, 17]                  # LGN2018 water classes, masked out
 BOWEN_SOURCE = os.environ.get('BOWEN_SOURCE')            # optional prepared 1 m raster (e.g. bowen_zeeland_lgn2018_1m.tif) instead of the LGN rule
 VEGETATION_SOURCE = os.environ.get('VEGETATION_SOURCE')  # optional prepared 1 m raster (e.g. vegetation_zeeland_lgn2018_1m.tif) instead of the LGN rule
+WIND_SOURCE = os.environ.get('WIND_SOURCE')   # optional zeeland-wind.gpkg from the wind team; 7.5 m/s placeholder where it has no value
+WIND_LAYER = 'wind_zeeland_land_candidate'
+FF10 = 7.677                                  # wind at 10 m (KNMI), as in main's geojson_service.calculate_wind_speed_1_2
 
 # Defaults from main's /pet/full-map-generation and pet_service.py
 T_MIN, T_MAX, AVERAGE_WIND = 27.2, 29.1, 7.5
@@ -145,8 +148,27 @@ def to_pixels(cells, resolution):
     cw, ch = round(CELL_W/resolution), round(CELL_H/resolution)
     return np.repeat(np.repeat(cells, ch, axis=0), cw, axis=1)
 
+def wind_cells(work, resolution):
+    """Wind at 1.2 m (m/s) per zone cell from WIND_SOURCE; the placeholder where no calculated value exists."""
+    rows = round((work.top-work.bottom)/resolution)
+    cols = round((work.right-work.left)/resolution)
+    if not WIND_SOURCE:
+        return np.full((rows//round(CELL_H/resolution), cols//round(CELL_W/resolution)), WIND_PLACEHOLDER, dtype='float32')
+    source = ogr.Open(WIND_SOURCE)
+    layer = source.GetLayerByName(WIND_LAYER)
+    layer.SetAttributeFilter("quality = 'model_value' AND u_1_2 > 0")   # skip the legacy zeros
+    layer.SetSpatialFilterRect(work.left, work.bottom, work.right, work.top)
+    target = to_gdal(np.full((rows, cols), np.nan, dtype='float32'), work, resolution)
+    gdal.RasterizeLayer(target, [1], layer, options=['ATTRIBUTE=u_1_2'])
+    u_factor = target.GetRasterBand(1).ReadAsArray().astype('float32')
+    u_factor[u_factor == NODATA] = np.nan
+    speed = FF10 * ((u_factor - 0.0796) * 0.9175 + 0.1254)              # geschaalde_u_1_2, as in main
+    speed = np.where(speed < 0.5, FF10 - speed, speed)
+    u = cell_means(speed, resolution)                                   # 250 x 125 m wind cells -> 140 x 280 m zone cells
+    source = None
+    return np.where(np.isfinite(u) & (u > 0), u, WIND_PLACEHOLDER).astype('float32')
 
-def zonal_partial_pet(vegetation, svf_raw, resolution):
+def zonal_partial_pet(vegetation, svf_raw, resolution, u):
     """calculate_zonal_uhi -> calculate_t_a_temperature -> calculate_wet_bulb_temp -> partial PET sun/shadow."""
     svf_mean, veg_mean = cell_means(svf_raw, resolution), cell_means(vegetation, resolution)
     base = ((663 * (T_MAX-T_MIN)**3) / AVERAGE_WIND) ** 0.25
@@ -155,10 +177,10 @@ def zonal_partial_pet(vegetation, svf_raw, resolution):
     r_h = RELATIVE_HUMIDITY
     t_w = (t_a * math.atan(0.151977 * math.sqrt(r_h + 8.313659)) + np.arctan(t_a + r_h)
            - math.atan(r_h - 1.676331) + 0.00391838 * r_h**1.5 * math.atan(0.023101 * r_h) - 4.686035)
-    u = WIND_PLACEHOLDER
-    sun = (-13.26 + 1.25*t_a + 0.011*Q_GL - 3.37*math.log(u) + 0.078*t_w
-           + 0.0055*Q_GL*math.log(u) + 5.56*math.sin(PHI) - 0.0103*Q_GL*math.log(u)*math.sin(PHI))
-    shadow = -12.14 + 1.25*t_a - 1.47*math.log(u) + 0.060*t_w
+    log_u = np.log(u)                      # u: wind per cell (array) from wind_cells()
+    sun = (-13.26 + 1.25*t_a + 0.011*Q_GL - 3.37*log_u + 0.078*t_w
+           + 0.0055*Q_GL*log_u + 5.56*math.sin(PHI) - 0.0103*Q_GL*log_u*math.sin(PHI))
+    shadow = -12.14 + 1.25*t_a - 1.47*log_u + 0.060*t_w
     return to_pixels(sun, resolution), to_pixels(shadow, resolution), to_pixels(t_a, resolution)
 
 
@@ -208,7 +230,7 @@ def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     svf = fill_nodata(svf_raw, work, resolution, distance_px=max(1, round(10/resolution)))  # 10 m search
     dsm = warp(SOURCE/'acquisition-20261005/elevation-dsm/native.vrt', work, dsm_resolution, 'average')
 
-    sun_partial, shadow_partial, t_a = zonal_partial_pet(vegetation, svf_raw, resolution)
+    sun_partial, shadow_partial, t_a = zonal_partial_pet(vegetation, svf_raw, resolution, wind_cells(work, resolution))
     sun_pet = sun_partial + 0.546*bowen + 1.94*svf                                         # calculate_total_pet_sun
     shadow_pet = (shadow_partial + 0.015*svf*Q_DIFF
                   + 0.0060*(1-svf)*BOLTZMANN*((t_a+273.15)**4))                            # calculate_total_pet_shadow
@@ -288,7 +310,8 @@ def main():
     report_path = out/'report.json'
     report = json.loads(report_path.read_text()) if report_path.exists() else {
         'resolution_m': args.resolution, 'tile_m': args.tile_m, 'bbox': bbox,
-        'wind_placeholder_m_s': WIND_PLACEHOLDER, 'tiles': {}}
+        'wind_placeholder_m_s': WIND_PLACEHOLDER, 'wind_source': WIND_SOURCE,
+        'bowen_source': BOWEN_SOURCE, 'vegetation_source': VEGETATION_SOURCE, 'tiles': {}}
     if (report['resolution_m'], report['tile_m']) != (args.resolution, args.tile_m):
         raise SystemExit(f'{out} holds a {report["resolution_m"]} m / {report["tile_m"]} m run; use a new --out folder')
     print(f'{len(tiles)} tiles with land, {len(report["tiles"])} already done', flush=True)
