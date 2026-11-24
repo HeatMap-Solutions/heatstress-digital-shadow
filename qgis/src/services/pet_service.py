@@ -222,7 +222,8 @@ class PETService:
         partial_pet_layer: str|QgsRasterLayer, 
         br_layer_path: str|QgsRasterLayer, 
         svf_layer_path: str|QgsRasterLayer, 
-        output_path: str
+        output_path: str,
+        exact_grid: bool = False,
     ) -> QgsRasterLayer:
         """
         Calculates the total sun pet over the entire given partial pet layer.
@@ -260,6 +261,10 @@ class PETService:
             'OUTPUT': output_path
         }
 
+        if exact_grid:
+            # Cropped inputs already share the target pixel grid; PROJWIN expands
+            # an aligned east/south edge in GDAL 3.10 (see local regression tests).
+            params.pop('PROJWIN')
         result = processing.run("gdal:rastercalculator", params, feedback=feedback)
 
         total_pet_layer = QgsRasterLayer(result['OUTPUT'], os.path.basename(output_path))
@@ -349,6 +354,8 @@ class PETService:
         shadow_pet: str|QgsRasterLayer,
         output_path: str,
         shadow_threshold: float = 127,
+        workspace: str | None = None,
+        exact_grid: bool = False,
         ) :
         """
         Calculates and returns the total PET map
@@ -370,10 +377,23 @@ class PETService:
             if not layer.isValid():
                 raise Exception(f"Raster layer is invalid: {layer.name()}")
         
-        shadow_maps_folder_path = "/data/shadow-maps"
+        shadow_maps_folder_path = workspace or "/data/shadow-maps"
         aligned_shadow_map_path = os.path.join(shadow_maps_folder_path, "shadow_map_aligned.tif")
 
-        self.raster_service.adjust_raster_pixel_resolution(shadow_map_path, sun_pet_obj, aligned_shadow_map_path)
+        if exact_grid:
+            from osgeo import gdal
+            extent = sun_pet_obj.extent()
+            warped = gdal.Warp(aligned_shadow_map_path, shadow_map_path,
+                               outputBounds=(extent.xMinimum(), extent.yMinimum(),
+                                             extent.xMaximum(), extent.yMaximum()),
+                               width=sun_pet_obj.width(), height=sun_pet_obj.height(),
+                               dstSRS=sun_pet_obj.crs().authid(), dstNodata=-9999,
+                               outputType=gdal.GDT_Float32, resampleAlg='near')
+            if warped is None:
+                raise RuntimeError('Could not align scenario hillshade')
+            warped = None
+        else:
+            self.raster_service.adjust_raster_pixel_resolution(shadow_map_path, sun_pet_obj, aligned_shadow_map_path)
 
         params = {
             'INPUT_A': sun_pet_path,
@@ -390,6 +410,8 @@ class PETService:
             'OUTPUT': output_path
         }
 
+        if exact_grid:
+            params.pop('PROJWIN')
         result = processing.run("gdal:rastercalculator", params, feedback=feedback)
 
         total_pet_layer = QgsRasterLayer(result['OUTPUT'], os.path.basename(output_path))
