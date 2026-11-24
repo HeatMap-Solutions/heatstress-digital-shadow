@@ -22,6 +22,8 @@ services:
       QGIS_SERVER_MAX_THREADS: "4"
       QGIS_SERVER_WMS_MAX_HEIGHT: "5000"
       QGIS_SERVER_WMS_MAX_WIDTH: "5000"
+      QGIS_SERVER_PROJECT_CACHE_STRATEGY: "periodic"
+      QGIS_SERVER_PROJECT_CACHE_CHECK_INTERVAL: "2000"
     command:
       - /bin/sh
       - -lc

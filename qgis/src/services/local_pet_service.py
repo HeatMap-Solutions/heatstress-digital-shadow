@@ -14,6 +14,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
+import numpy as np
 from osgeo import gdal, osr
 
 from src.api.models.point import Point
@@ -22,6 +23,7 @@ from src.services.raster_service import RasterService
 from src.services.scenario_grid import Bounds, ScenarioGrid
 from src.services.shadow_service import ShadowService
 from src.utils.update_qgis_project import update_pet_layer_in_project
+from src.utils.pet_tiles import build_overviews, build_vrt
 
 
 STATE_FILE = 'pet-scenario.json'
@@ -29,6 +31,8 @@ ALGORITHM_VERSION = 1
 # FillNoData searches 10 PET pixels; allow extra context for hillshade and
 # nearest-neighbour resampling. Regression tests compare buffered vs full runs.
 PROCESSING_BUFFER_METERS = 16
+PATCH_NODATA = -9999.0   # same NoData as the tiles; NoData in a patch lets the shared map show through
+ZEELAND_RUN = 'zeeland-1m-3x3'
 
 
 @dataclass(frozen=True)
@@ -94,13 +98,14 @@ class LocalPETService:
     def __init__(self, data_root='/data', sessions_root=None):
         self.root = Path(data_root)
         self.sessions = Path(sessions_root) if sessions_root else self.root/'server/sessions'
-        self.grid_path = self.root/'server/wind-speed-calc.geojson'
+        run = self.root/'zeeland-tiles'/ZEELAND_RUN
+        self.grid_path = self.root/'zeeland/sources/wind/zeeland-wind-grid.geojson'   # from tools/zeeland_wind_grid.py
         self.inputs = {
-            'dsm': self.root/'dsm.TIF',
-            'bowen': self.root/'raster/br-reproject.tif',
-            'svf': self.root/'raster/svf-reproject-filled.tif',
-            'sun': self.root/'uhi/sun-bbox.tif',
-            'shadow': self.root/'uhi/shadow-pet.tif',
+            'dsm': self.root/'zeeland/acquisition-20261005/elevation-dsm/native.vrt',  # AHN3 0.5 m
+            'bowen': self.root/'zeeland-tiles/inputs/bowen_zeeland_lgn2018_1m.tif',
+            'svf': run/'svf.vrt',
+            'sun': run/'sun-partial.vrt',
+            'shadow': run/'shadow-pet.vrt',
         }
 
     def layouts(self):
@@ -242,12 +247,14 @@ class LocalPETService:
         selected = {key for key in selected if grid.cells[key].intersect(coverage)}
         for key in selected:
             target_layout.window(grid.cells[key].intersect(coverage))
-        output = project.parent/f'pet_{uuid.uuid4().hex}_filled.tif'
+        # Zeeland: never copy the shared map. Each recalculated region is saved as a small patch
+        # file in the session folder, and the session map is a VRT: shared map + this session's
+        # patches, later patches on top. The shared tiles are never written to.
+        output = project.parent/f'pet_{uuid.uuid4().hex}.vrt'
+        old_patches = [project.parent/name for name in (state.get('patches', []) if state else [])]
+        new_patches = []
         timings = {}
         try:
-            stage = time.perf_counter()
-            shutil.copyfile(previous, output)
-            timings['copy_previous'] = time.perf_counter()-stage
             regions = grid.regions(selected)
             with tempfile.TemporaryDirectory(prefix='pet-work-', dir=project.parent) as temporary:
                 for index, region in enumerate(regions):
@@ -257,15 +264,20 @@ class LocalPETService:
                     for key, seconds in measured.items():
                         timings[key] = timings.get(key, 0)+seconds
                     stage = time.perf_counter()
-                    self._write_patch(output, patch, core)
+                    patch_file = project.parent/f'patch_{uuid.uuid4().hex}.tif'
+                    new_patches.append(patch_file)
+                    self._write_patch_file(patch, core, patch_file, baseline)
                     timings['write_patch'] = timings.get('write_patch', 0)+time.perf_counter()-stage
-            if RasterLayout.read(output) != target_layout:
-                raise RuntimeError('Session output grid changed unexpectedly')
             stage = time.perf_counter()
-            self._refresh_overviews(output, [region.intersect(coverage) for region in regions])
-            timings['refresh_display'] = time.perf_counter()-stage
+            build_vrt(output, [baseline, *old_patches, *new_patches], nodata=PATCH_NODATA)
+            timings['build_session_vrt'] = time.perf_counter()-stage
+            result = RasterLayout.read(output)
+            if (result.width, result.height, result.transform) != (
+                    target_layout.width, target_layout.height, target_layout.transform):
+                raise RuntimeError('Session output grid changed unexpectedly')
             new_state = {'signature': signature, 'points': current, 'order': list(current),
-                         'raster': output.name}
+                         'raster': output.name,
+                         'patches': [p.name for p in (*old_patches, *new_patches)]}
             stage = time.perf_counter()
             # State and published raster pointer share ONE atomic QGZ replacement.
             update_pet_layer_in_project(str(project), str(output), output.stem,
@@ -273,6 +285,8 @@ class LocalPETService:
             timings['publish'] = time.perf_counter()-stage
         except Exception:
             output.unlink(missing_ok=True)
+            for patch_file in new_patches:
+                patch_file.unlink(missing_ok=True)
             raise
         timings['total'] = time.perf_counter()-started
         return {'status': 'success', 'message': f'Updated {len(selected)} grid cells',
@@ -317,3 +331,38 @@ class LocalPETService:
                 target_band.SetMetadataItem(key, None)
         target.FlushCache()
         source = target = None
+
+
+    @staticmethod
+    def _write_patch_file(patch, core, path, baseline):
+        """Cut the recalculated core out of the patch and save it as its own small GeoTIFF."""
+        layout = RasterLayout.read(patch)
+        x, y, w, h = layout.window(core)
+        source = gdal.Open(str(patch))
+        band = source.GetRasterBand(1)
+        values = band.ReadAsArray(x, y, w, h).astype('float32')
+        nodata = band.GetNoDataValue()
+        if nodata is not None:
+            values[values == nodata] = PATCH_NODATA
+        values[~np.isfinite(values)] = PATCH_NODATA
+        # Keep the shared map's NoData (water, outside Zeeland): the 3x3 fill must not bleed into it.
+        base_layout = RasterLayout.read(baseline)
+        bx, by, bw, bh = base_layout.window(core)
+        base = gdal.Open(str(baseline))
+        base_band = base.GetRasterBand(1)
+        base_values = base_band.ReadAsArray(bx, by, bw, bh)
+        base_nodata = base_band.GetNoDataValue()
+        if base_nodata is not None:
+            values[base_values == base_nodata] = PATCH_NODATA
+        values[~np.isfinite(base_values)] = PATCH_NODATA
+        base = None
+        target = gdal.GetDriverByName('GTiff').Create(str(path), w, h, 1, gdal.GDT_Float32,
+                                                      ['TILED=YES', 'COMPRESS=DEFLATE'])
+        target.SetGeoTransform((core.left, layout.transform[1], 0, core.top, 0, layout.transform[5]))
+        target.SetProjection(source.GetProjection())
+        out_band = target.GetRasterBand(1)
+        out_band.SetNoDataValue(PATCH_NODATA)
+        if out_band.WriteArray(values) != gdal.CE_None:
+            raise RuntimeError('Failed to write the PET patch')
+        target = source = None
+        build_overviews(path)   # NEAREST, like the tiles, so zoomed-out views stay correct

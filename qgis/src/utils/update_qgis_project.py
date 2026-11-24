@@ -141,6 +141,7 @@ def update_pet_layer_in_project(
             z.writestr(qgs_name, qgs_output.encode("utf-8"))
             for name, data in other_files.items():
                 z.writestr(name, data)
+        os.chmod(tmp_path, 0o644)
         shutil.move(tmp_path, project_path)
     except Exception:
         if os.path.exists(tmp_path):

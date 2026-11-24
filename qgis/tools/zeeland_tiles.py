@@ -244,6 +244,13 @@ def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     keep = (boundary_mask(boundary_layer, tile, resolution) & land[core]
         & np.isfinite(pet[core]) & (svf[core] >= 0) & (svf[core] <= 1))  
     result = np.where(keep, pet[core], np.nan).astype('float32')
+    # Intermediate layers for the 3x3 update (local_pet_service.py), on the same grid as the PET tile.
+    # Written before the PET tile, so a finished PET tile always has its three intermediate tiles.
+    for name, values in (('svf', svf), ('sun-partial', sun_partial), ('shadow-pet', shadow_pet)):
+        extra = path.parent.parent/f'tiles-{name}'/path.name
+        extra.parent.mkdir(exist_ok=True)
+        ds = to_gdal(values[core].astype('float32'), tile, resolution, path=extra, options=TILE_OPTIONS)
+        ds = None
     partial = path.with_name(path.stem + '.partial.tif')
     ds = to_gdal(result, tile, resolution, path=partial, options=TILE_OPTIONS)
     ds = None
@@ -338,6 +345,10 @@ def main():
     done = [tiles_dir/name for name in sorted(report['tiles']) if (tiles_dir/name).exists()]
     if done:
         build_vrt(out/'pet.vrt', done)
+        for name in ('svf', 'sun-partial', 'shadow-pet'):      # inputs for the 3x3 update
+            extra = [out/f'tiles-{name}'/p.name for p in done if (out/f'tiles-{name}'/p.name).exists()]
+            if extra:
+                build_vrt(out/f'{name}.vrt', extra)
     rows = report['tiles'].values()
     report['summary'] = {
         'tiles_done': f'{len(report["tiles"])}/{len(tiles)}',
