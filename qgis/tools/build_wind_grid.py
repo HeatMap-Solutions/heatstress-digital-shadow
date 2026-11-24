@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Zeeland scenario grid for the 3 x 3 update, made from the wind team's GeoPackage.
+"""Scenario grid for the 3 x 3 update, made from the wind team's GeoPackage.
 
 The 3 x 3 update (src/services/scenario_grid.py) needs the same kind of file as
 Middelburg's /data/server/wind-speed-calc.geojson: one RECTANGLE per wind cell,
@@ -8,7 +8,7 @@ counting from north to south. The wind GeoPackage has the same cells, but clippe
 to land, with column_id/row_id and row_id counting from south to north. This
 script converts it; the wind values themselves are copied along as information.
 
-    python3 /app/tools/zeeland_wind_grid.py        # paths from src/configs/area.py
+    python3 /app/tools/build_wind_grid.py        # paths from src/configs/area.py
 """
 
 import json

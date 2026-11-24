@@ -5,8 +5,6 @@ import hashlib
 import json
 import math
 from pathlib import Path
-import shutil
-import subprocess
 import tempfile
 import time
 import uuid
@@ -94,7 +92,7 @@ def normalise_points(points):
 class LocalPETService:
     def __init__(self, sessions_root=None):
         self.sessions = Path(sessions_root) if sessions_root else area.SERVER/'sessions'
-        self.grid_path = area.WIND_GRID           # from tools/zeeland_wind_grid.py
+        self.grid_path = area.WIND_GRID           # from tools/build_wind_grid.py
         self.inputs = None                        # set per update from the published run, see _inputs_for()
 
     @staticmethod
@@ -294,45 +292,7 @@ class LocalPETService:
                 'output': str(output), 'updated_cells': [list(key) for key in sorted(selected)],
                 'timings_seconds': timings}
 
-    @staticmethod
-    def _refresh_overviews(output, regions):
-        """Refresh copied internal display overviews only over changed regions."""
-        raster = gdal.Open(str(output))
-        count = raster.GetRasterBand(1).GetOverviewCount()
-        raster = None
-        if not count:
-            return
-        for region in regions:
-            # GDAL 3.10's Python binding lacks partial-refresh options. Its CLI
-            # rounds the requested extent to the existing overview pixel grid.
-            # Omit -r so GDAL preserves the existing overview resampling method.
-            subprocess.run(['gdaladdo','--partial-refresh-from-projwin',
-                str(region.left),str(region.top),str(region.right),str(region.bottom),
-                str(output)],check=True,capture_output=True,text=True)
-
-    @staticmethod
-    def _write_patch(output, patch, core):
-        source = gdal.Open(str(patch))
-        target = gdal.Open(str(output), gdal.GA_Update)
-        sx, sy, w, h = RasterLayout.read(patch).window(core)
-        tx, ty, _, _ = RasterLayout.read(output).window(core)
-        source_band, target_band = source.GetRasterBand(1), target.GetRasterBand(1)
-        values = source_band.ReadAsArray(sx, sy, w, h)
-        # Preserve the target's NoData convention, rather than introducing a
-        # second sentinel that would be rendered as a real temperature.
-        source_nodata, target_nodata = source_band.GetNoDataValue(), target_band.GetNoDataValue()
-        if source_nodata != target_nodata:
-            if target_nodata is None:
-                raise ValueError('Baseline PET must declare its NoData value')
-            values[values == source_nodata] = target_nodata
-        if target_band.WriteArray(values, tx, ty) != gdal.CE_None:
-            raise RuntimeError('Failed to write the calculated PET patch')
-        for key in list(target_band.GetMetadata()):
-            if key.startswith('STATISTICS_'):
-                target_band.SetMetadataItem(key, None)
-        target.FlushCache()
-        source = target = None
-
+    
     @staticmethod
     def _read_values(path):
         """Band 1 of a raster as a float32 numpy array, NaN where NoData."""

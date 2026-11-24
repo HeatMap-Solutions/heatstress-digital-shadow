@@ -2,7 +2,7 @@
 
 These are the formulas of the original Middelburg pipeline (pet_service.py and
 geojson_service.py on main), based on the Standaard Stresstest Hitte. They are used by
-  - the map:        tools/zeeland_tiles.py, per tile
+  - the map:        src/services/pet_map_service.py, per tile
   - the 3x3 update: src/services/local_pet_service.py, per region
 so the map and the 3x3 update always calculate the same thing.
 

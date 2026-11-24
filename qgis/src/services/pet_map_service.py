@@ -1,35 +1,33 @@
-#!/usr/bin/env python3
-"""Zeeland PET map, generated tile by tile (tiles approach for the proof of concept).
+"""The PET map, calculated tile by tile (used by tools/generate_pet_map.py).
 
 Every tile is calculated on its own, with a one-grid-cell margin (halo) so the
 edges match their neighbours. Intermediate rasters stay in memory and only the
 tile's final PET is written, so memory and working disk depend on the tile
-size, not on the size of Zeeland. A VRT joins the tiles into one map.
+size, not on the size of the area. A VRT joins the tiles into one map.
 
 The PET formulas are in src/services/pet_formulas.py, shared with the 3x3 update.
 Because the zones are grid cells that line up with the pixels, the zonal means
 are done with numpy instead of QGIS vector round trips.
 
 Data paths (sources, Bowen/vegetation, wind): src/configs/area.py
-    python3 tools/zeeland_tiles.py --resolution 1 --out /data/zeeland-tiles/pilot --bbox 30000,388150,35600,393750
-    python3 tools/zeeland_tiles.py --resolution 1 --out /data/zeeland-tiles/zeeland-1m   # all of Zeeland
+
+A run folder holds:
+    tiles/                          the PET tiles; pet.vrt joins them (this is the map)
+    tiles-svf/, tiles-sun-partial/, tiles-shadow-pet/
+                                    intermediate layers for the 3x3 update (svf.vrt, sun-partial.vrt, shadow-pet.vrt)
+    report.json                     settings and time/size per tile; finished tiles are skipped when a run is resumed
 """
-import argparse
 from dataclasses import dataclass
-from datetime import datetime
 import json
 import math
-import os
 from pathlib import Path
 import resource
-import sys
 import time
 import warnings
 
 import numpy as np
 from osgeo import gdal, ogr, osr
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.utils.pet_tiles import TILE_OPTIONS, build_overviews, build_vrt
 from src.configs import area
 from src.services import pet_formulas as pf
@@ -116,6 +114,7 @@ def boundary_mask(boundary_layer, bounds, resolution):
 
 
 # ---------- per-cell (zonal) part ----------
+
 def cell_means(values, resolution):
     """Mean of each 140 x 280 m cell, ignoring NoData (what QgsZonalStatistics computes for these cells)."""
     cw, ch = round(CELL_W/resolution), round(CELL_H/resolution)
@@ -130,8 +129,9 @@ def to_pixels(cells, resolution):
     cw, ch = round(CELL_W/resolution), round(CELL_H/resolution)
     return np.repeat(np.repeat(cells, ch, axis=0), cw, axis=1)
 
+
 def wind_cells(work, resolution):
-    """Wind at 1.2 m (m/s) per zone cell from area.WIND; the placeholder where no calculated value exists."""    
+    """Wind at 1.2 m (m/s) per zone cell from area.WIND; the placeholder where no calculated value exists."""
     rows = round((work.top-work.bottom)/resolution)
     cols = round((work.right-work.left)/resolution)
     source = ogr.Open(str(area.WIND))
@@ -149,12 +149,14 @@ def wind_cells(work, resolution):
     source = None
     return np.where(np.isfinite(u) & (u > 0), u, pf.WIND_PLACEHOLDER).astype('float32')
 
+
 def zonal_partial_pet(vegetation, svf_raw, resolution, u):
     """Per zone cell: air temperature, wet bulb and the partial PET in sun and shade (see pet_formulas)."""
     t_a = pf.air_temperature(cell_means(svf_raw, resolution), cell_means(vegetation, resolution))
     t_w = pf.wet_bulb_temperature(t_a)
     sun, shadow = pf.partial_pet_sun(t_a, t_w, u), pf.partial_pet_shadow(t_a, t_w, u)
     return to_pixels(sun, resolution), to_pixels(shadow, resolution), to_pixels(t_a, resolution)
+
 
 # ---------- one tile ----------
 
@@ -190,7 +192,7 @@ def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     hx, hy = round(CELL_W/resolution), round(CELL_H/resolution)
     core = (slice(hy, pet.shape[0]-hy), slice(hx, pet.shape[1]-hx))
     keep = (boundary_mask(boundary_layer, tile, resolution) & land[core]
-        & np.isfinite(pet[core]) & (svf[core] >= 0) & (svf[core] <= 1))  
+        & np.isfinite(pet[core]) & (svf[core] >= 0) & (svf[core] <= 1))
     result = np.where(keep, pet[core], np.nan).astype('float32')
     # Intermediate layers for the 3x3 update (local_pet_service.py), on the same grid as the PET tile.
     # Written before the PET tile, so a finished PET tile always has its three intermediate tiles.
@@ -241,34 +243,36 @@ def save(path, value):
     partial.replace(path)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--resolution', type=float, required=True, choices=[1, 2], help='PET pixel size in metres')
-    parser.add_argument('--out', type=Path, required=True, help='output folder, e.g. /out/zeeland-2m')
-    parser.add_argument('--tile-m', type=int, default=2800, help='tile size in metres (multiple of 280)')
-    parser.add_argument('--bbox', help='only tiles touching left,bottom,right,top (RD New metres)')
-    parser.add_argument('--max-tiles', type=int, default=0, help='stop after this many new tiles (timing sample)')
-    args = parser.parse_args()
-    if args.tile_m % CELL_H or args.tile_m % CELL_W:
-        raise SystemExit('--tile-m must be a multiple of 140 and 280, e.g. 2800')
+def generate(out, resolution, tile_m=2800, bbox=None, max_tiles=0):
+    """Calculate a PET run in the folder `out`, or resume it; returns the summary that is also in report.json.
+
+    resolution: PET pixel size in metres (1 or 2). tile_m: tile size in metres (multiple of 280).
+    bbox: (left, bottom, right, top) in RD New metres, only tiles touching it; None for the whole area.
+    max_tiles: stop after this many new tiles (a timing sample); 0 = no limit.
+    """
+    if resolution not in (1, 2):
+        raise ValueError('resolution must be 1 or 2 (metres)')
+    if tile_m % CELL_H or tile_m % CELL_W:
+        raise ValueError('tile_m must be a multiple of 140 and 280, e.g. 2800')
     gdal.UseExceptions()
     gdal.SetCacheMax(256*1024**2)
 
-    out, tiles_dir = args.out, args.out/'tiles'
+    out = Path(out)
+    tiles_dir = out/'tiles'
     tiles_dir.mkdir(parents=True, exist_ok=True)
     boundary = ogr.Open(str(area.BOUNDARY))
     layer = boundary.GetLayer()
-    bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else None
-    tiles = tile_list(layer, args.tile_m, bbox)
+    bbox = list(bbox) if bbox else None
+    tiles = tile_list(layer, tile_m, bbox)
     svf_source = svf_vrt(out)
 
     report_path = out/'report.json'
     report = json.loads(report_path.read_text()) if report_path.exists() else {
-        'resolution_m': args.resolution, 'tile_m': args.tile_m, 'bbox': bbox,
+        'resolution_m': resolution, 'tile_m': tile_m, 'bbox': bbox,
         'wind_placeholder_m_s': pf.WIND_PLACEHOLDER, 'wind_source': str(area.WIND),
         'bowen_source': str(area.BOWEN), 'vegetation_source': str(area.VEGETATION), 'tiles': {}}
-    if (report['resolution_m'], report['tile_m']) != (args.resolution, args.tile_m):
-        raise SystemExit(f'{out} holds a {report["resolution_m"]} m / {report["tile_m"]} m run; use a new --out folder')
+    if (report['resolution_m'], report['tile_m']) != (resolution, tile_m):
+        raise ValueError(f'{out} holds a {report["resolution_m"]} m / {report["tile_m"]} m run; use a new folder')
     print(f'{len(tiles)} tiles with land, {len(report["tiles"])} already done', flush=True)
 
     new = 0
@@ -277,10 +281,10 @@ def main():
         path = tiles_dir/name
         if name in report['tiles'] and path.exists():
             continue
-        if args.max_tiles and new >= args.max_tiles:
+        if max_tiles and new >= max_tiles:
             break
         started = time.perf_counter()
-        supported = calculate_tile(box, args.resolution, layer, svf_source, path)
+        supported = calculate_tile(box, resolution, layer, svf_source, path)
         report['tiles'][name] = {'bounds': [box.left, box.bottom, box.right, box.top],
                                  'seconds': round(time.perf_counter()-started, 1),
                                  'supported_pixels': supported,
@@ -302,12 +306,8 @@ def main():
         'tiles_done': f'{len(report["tiles"])}/{len(tiles)}',
         'seconds': round(sum(t['seconds'] for t in rows)),
         'final_gb': round(sum(t['bytes'] for t in rows)/1e9, 3),
-        'supported_km2': round(sum(t['supported_pixels'] for t in rows)*args.resolution**2/1e6, 2),
+        'supported_km2': round(sum(t['supported_pixels'] for t in rows)*resolution**2/1e6, 2),
         'peak_memory_mib': max((t['peak_memory_mib'] for t in rows), default=0),
     }
     save(report_path, report)
-    print(json.dumps(report['summary'], indent=2))
-
-
-if __name__ == '__main__':
-    main()
+    return report['summary']

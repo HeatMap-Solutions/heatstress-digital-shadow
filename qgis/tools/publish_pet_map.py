@@ -4,7 +4,7 @@
 Writes /data/server/starting-map.qgz and /data/server/map.qgz with one layer,
 'pet-version-1', reading the run's tiles through a VRT in /data/server.
 
-    python3 /app/tools/zeeland_tiles_project.py /data/zeeland-tiles/zeeland-1m/pet.vrt
+    python3 /app/tools/publish_pet_map.py /data/zeeland-tiles/zeeland-1m/pet.vrt
 """
 from pathlib import Path
 import shutil

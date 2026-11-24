@@ -1,20 +1,35 @@
-"""Offline regression tests. Run in the QGIS image; no PDOK or supplied data needed."""
+"""Tests for the 3x3 update (src/services/local_pet_service.py).
+
+Offline: a small synthetic data set (7 x 7 wind cells of 40 x 80 m) is built in a
+temporary folder, so no PDOK and no Zeeland data are needed. Run in the qgis container:
+
+    docker exec -w /app qgis python3 -m pytest tests/test_local_pet.py -v
+
+The main check (assert_matches_full) is that recalculating only the 3x3 cells around
+a tree gives exactly the same pixels as recalculating the whole area with that tree,
+and that every pixel outside those cells stays as it was.
+"""
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import shutil
-import uuid
-import zipfile
-from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+import uuid
+import zipfile
 
 import numpy as np
 from osgeo import gdal, osr
 import pytest
 
 from src.api.models.point import Point
-from src.services.local_pet_service import LocalPETService, RasterLayout, normalise_points
-from src.services.scenario_grid import Bounds, ScenarioGrid
+from src.services.local_pet_service import LocalPETService, PATCH_NODATA, RasterLayout, normalise_points
+from src.services.scenario_grid import ScenarioGrid
+
+# The same inputs the real service reads from a tiles run (see LocalPETService._inputs_for).
+INPUT_FILES = {'dsm': 'dsm.tif', 'bowen': 'bowen.tif', 'svf': 'svf.tif',
+               'sun': 'sun-partial.tif', 'shadow': 'shadow-pet.tif'}
 
 
 def write_grid(path, cols=7, rows=7):
@@ -54,46 +69,68 @@ def point(col=3, row=3, id='tree-a', **changes):
     return Point(**(data | changes))
 
 
-@pytest.fixture(scope='module')
-def prepared(tmp_path_factory, qgis_app):
-    root = tmp_path_factory.mktemp('prepared-pet')
-    (root/'server').mkdir()
-    write_grid(root/'server/wind-speed-calc.geojson')
-    yy, xx = np.indices((1120, 560))
-    dsm = (2+xx*0.01+yy*0.002).astype('float32')
-    dsm[300:350, 230:270] += 10
-    raster(root/'dsm.TIF', dsm, .5)
-    for name, value in [('raster/br-reproject.tif', .7), ('raster/svf-reproject-filled.tif', .6),
-                        ('uhi/sun-bbox.tif', 30), ('uhi/shadow-pet.tif', 24)]:
-        values = np.full((560, 280), value, dtype='float32')
-        # NoData stripe crosses a selected region's southern boundary.
-        values[397:402, 80:200] = -9999
-        raster(root/name, values)
-    svc = LocalPETService(root)
-    baseline, _ = svc.calculate_region(svc.layouts()[1], {}, root/'baseline-work')
-    shutil.copyfile(baseline, root/'server/pet-version-1.tif')
-    return root
+def make_service(root, sessions=None):
+    """LocalPETService on the synthetic data in `root` instead of the published Zeeland run."""
+    service = LocalPETService(sessions or root/'sessions')
+    inputs = {name: root/file for name, file in INPUT_FILES.items()}
+    service.grid_path = root/'grid.geojson'
+    service.inputs = inputs
+    service._inputs_for = lambda baseline: inputs
+    return service
 
 
-@pytest.fixture
-def session(prepared, tmp_path):
-    sessions = tmp_path/'sessions'
+def make_session(sessions, baseline):
+    """A session folder with a map.qgz whose 'pet-version-1' layer is `baseline` (as the backend makes it)."""
     sid = str(uuid.uuid4())
     folder = sessions/sid
     folder.mkdir(parents=True)
-    baseline = prepared/'server/pet-version-1.tif'
     xml = f'''<qgis><projectlayers><maplayer><id>base</id><layername>pet-version-1</layername>
     <datasource>{baseline}</datasource></maplayer></projectlayers><layer-tree-group>
     <layer-tree-layer id="base" name="pet-version-1"/><custom-order><item>base</item></custom-order>
     </layer-tree-group></qgis>'''
     with zipfile.ZipFile(folder/'map.qgz', 'w') as archive:
         archive.writestr('map.qgs', xml)
-    return LocalPETService(prepared, sessions), sid, folder
+    return sid, folder
 
 
-def assert_matches_full(service, result, objects, tmp_path, previous):
+@pytest.fixture(scope='module')
+def prepared(tmp_path_factory, qgis_app):
+    """Synthetic inputs plus the shared map ('baseline'), calculated from them without trees."""
+    root = tmp_path_factory.mktemp('prepared-pet')
+    write_grid(root/'grid.geojson')
+    yy, xx = np.indices((1120, 560))
+    dsm = (2+xx*0.01+yy*0.002).astype('float32')
+    dsm[300:350, 230:270] += 10
+    raster(root/INPUT_FILES['dsm'], dsm, .5)
+    for name, value in [('bowen', .7), ('svf', .6), ('sun', 30), ('shadow', 24)]:
+        values = np.full((560, 280), value, dtype='float32')
+        # NoData stripe crosses a selected region's southern boundary.
+        values[397:402, 80:200] = -9999
+        raster(root/INPUT_FILES[name], values)
+    service = make_service(root)
+    baseline, _ = service.calculate_region(service.layouts()[1], {}, root/'baseline-work')
+    shutil.copyfile(baseline, root/'pet-baseline.tif')
+    return root
+
+
+@pytest.fixture
+def baseline(prepared):
+    return prepared/'pet-baseline.tif'
+
+
+@pytest.fixture
+def session(prepared, baseline, tmp_path):
+    sessions = tmp_path/'sessions'
+    sid, folder = make_session(sessions, baseline)
+    return make_service(prepared, sessions), sid, folder
+
+
+def assert_matches_full(service, result, objects, tmp_path, previous, baseline):
+    """Selected cells equal a full recalculation; all other pixels equal `previous`; same grid."""
     full, _ = service.calculate_region(service.layouts()[1], normalise_points(objects), tmp_path/'reference')
-    expected, actual, prior = read(full), read(result['output']), read(previous)
+    expected, actual, prior, base = read(full), read(result['output']), read(previous), read(baseline)
+    # The shared map's NoData (water, outside the area) is never filled in by an update.
+    expected = np.where(base == PATCH_NODATA, PATCH_NODATA, expected)
     selected = np.zeros(actual.shape, dtype=bool)
     grid = ScenarioGrid(service.grid_path)
     layout = RasterLayout.read(result['output'])
@@ -102,7 +139,8 @@ def assert_matches_full(service, result, objects, tmp_path, previous):
         selected[y:y+h, x:x+w] = True
     np.testing.assert_array_equal(actual[selected], expected[selected])
     np.testing.assert_array_equal(actual[~selected], prior[~selected])
-    assert RasterLayout.read(result['output']) == RasterLayout.read(previous)
+    before = RasterLayout.read(previous)
+    assert (layout.width, layout.height, layout.transform) == (before.width, before.height, before.transform)
 
 
 def test_grid_indices_edges_and_exact_union(tmp_path):
@@ -144,12 +182,11 @@ def test_point_ids_and_invalid_values():
         normalise_points([point(x=float('nan'))])
 
 
-def test_single_tree_exact_against_full_and_noop(session, tmp_path):
+def test_single_tree_exact_against_full_and_noop(session, baseline, tmp_path):
     svc, sid, folder = session
-    baseline = svc.root/'server/pet-version-1.tif'
     result = svc.update([point()], sid)
     assert len(result['updated_cells']) == 9
-    assert_matches_full(svc, result, [point()], tmp_path, baseline)
+    assert_matches_full(svc, result, [point()], tmp_path, baseline, baseline)
     before = (folder/'map.qgz').read_bytes()
     repeated = svc.update([point()], sid)
     assert repeated['updated_cells'] == []
@@ -164,23 +201,62 @@ def test_single_tree_exact_against_full_and_noop(session, tmp_path):
     [point(col=0, row=0), point(col=6, row=6, id='tree-b')],
     [point(), point(id='tree-b', x=30143)],
 ])
-def test_boundaries_distant_and_overlapping_trees(session, tmp_path, objects):
+def test_boundaries_distant_and_overlapping_trees(session, baseline, tmp_path, objects):
     svc, sid, _ = session
     result = svc.update(objects, sid)
-    assert_matches_full(svc, result, objects, tmp_path, svc.root/'server/pet-version-1.tif')
+    assert_matches_full(svc, result, objects, tmp_path, baseline, baseline)
 
 
-def test_move_property_change_and_delete(session, tmp_path):
+def test_move_property_change_and_delete(session, baseline, tmp_path):
     svc, sid, _ = session
     original = svc.update([point(col=1, row=1)], sid)
     moved = point(col=5, row=5, height=20)
     updated = svc.update([moved], sid)
     assert len(updated['updated_cells']) == 18
-    assert_matches_full(svc, updated, [moved], tmp_path/'move', original['output'])
+    assert_matches_full(svc, updated, [moved], tmp_path/'move', original['output'], baseline)
     deleted = svc.update([], sid)
     assert len(deleted['updated_cells']) == 9
-    assert_matches_full(svc, deleted, [], tmp_path/'delete', updated['output'])
-    np.testing.assert_array_equal(read(deleted['output']), read(svc.root/'server/pet-version-1.tif'))
+    assert_matches_full(svc, deleted, [], tmp_path/'delete', updated['output'], baseline)
+    np.testing.assert_array_equal(read(deleted['output']), read(baseline))
+
+
+def test_shared_map_is_never_written(session, baseline):
+    svc, sid, _ = session
+    before, modified = baseline.read_bytes(), baseline.stat().st_mtime_ns
+    svc.update([point()], sid)
+    svc.update([point(col=5, row=5)], sid)
+    svc.update([], sid)
+    assert baseline.read_bytes() == before
+    assert baseline.stat().st_mtime_ns == modified
+
+
+def test_session_map_is_the_shared_map_plus_small_patches(session):
+    svc, sid, folder = session
+    result = svc.update([point()], sid)
+    assert Path(result['output']).suffix == '.vrt'
+    patches = list(folder.glob('patch_*.tif'))
+    assert len(patches) == 1                                    # one region: the 3x3 cells
+    layout = RasterLayout.read(patches[0])
+    assert (layout.width, layout.height) == (3*40, 3*80)        # only the 3x3 cells, 1 m pixels
+    patch = gdal.Open(str(patches[0]))
+    assert patch.GetRasterBand(1).GetOverviewCount() == 4       # NEAREST overviews, like the tiles
+    patch = None
+
+
+def test_update_keeps_the_shared_maps_no_data(prepared, baseline, tmp_path):
+    """A tree next to water: the update must not fill (bleed) PET values into the water."""
+    water = tmp_path/'pet-with-water.tif'
+    shutil.copyfile(baseline, water)
+    values = read(water)
+    values[250:260, 130:140] = PATCH_NODATA                     # inside the 3x3 cells around point()
+    ds = gdal.Open(str(water), gdal.GA_Update)
+    ds.GetRasterBand(1).WriteArray(values)
+    ds = None
+    sid, _ = make_session(tmp_path/'sessions', water)
+    svc = make_service(prepared, tmp_path/'sessions')
+    result = svc.update([point()], sid)
+    assert np.all(read(result['output'])[250:260, 130:140] == PATCH_NODATA)
+    assert_matches_full(svc, result, [point()], tmp_path, water, water)
 
 
 def test_failure_keeps_published_state_and_previous_raster(session, monkeypatch):
@@ -188,6 +264,7 @@ def test_failure_keeps_published_state_and_previous_raster(session, monkeypatch)
     first = svc.update([point()], sid)
     project_before = (folder/'map.qgz').read_bytes()
     raster_before = Path(first['output']).read_bytes()
+    patches_before = sorted(folder.glob('patch_*.tif'))
     def fail(*args, **kwargs):
         raise RuntimeError('simulated calculation failure')
     monkeypatch.setattr(svc, 'calculate_region', fail)
@@ -195,7 +272,8 @@ def test_failure_keeps_published_state_and_previous_raster(session, monkeypatch)
         svc.update([point(height=21)], sid)
     assert (folder/'map.qgz').read_bytes() == project_before
     assert Path(first['output']).read_bytes() == raster_before
-    assert len(list(folder.glob('pet_*_filled.tif'))) == 1
+    assert len(list(folder.glob('pet_*.vrt'))) == 1
+    assert sorted(folder.glob('patch_*.tif')) == patches_before
     assert not list(folder.glob('pet-work-*'))
 
 
@@ -210,14 +288,14 @@ def test_invalid_requests_do_not_publish(session):
     assert (folder/'map.qgz').read_bytes() == before
 
 
-def test_empty_first_save_and_restart(session):
+def test_empty_first_save_and_restart(session, prepared):
     svc, sid, folder = session
     result = svc.update([], sid)
     assert result['updated_cells'] == []
     with zipfile.ZipFile(folder/'map.qgz') as archive:
         saved = json.loads(archive.read('pet-scenario.json'))
     assert saved['points'] == {}
-    restarted = LocalPETService(svc.root, svc.sessions)
+    restarted = make_service(prepared, svc.sessions)
     assert restarted.update([], sid)['output'] == result['output']
 
 
@@ -225,6 +303,19 @@ def test_input_signature_change_requires_new_session(session, monkeypatch):
     svc, sid, _ = session
     svc.update([], sid)
     monkeypatch.setattr(svc, '_signature', lambda baseline: {'algorithm': -1})
+    with pytest.raises(ValueError, match='inputs changed'):
+        svc.update([point()], sid)
+
+
+def test_republishing_the_map_requires_new_session(prepared, baseline, tmp_path):
+    """What happens after tools/publish_pet_map.py: the shared map file changes, old sessions are refused."""
+    published = tmp_path/'pet-published.tif'
+    shutil.copyfile(baseline, published)
+    sid, _ = make_session(tmp_path/'sessions', published)
+    svc = make_service(prepared, tmp_path/'sessions')
+    svc.update([], sid)
+    later = published.stat().st_mtime_ns + 10**9
+    os.utime(published, ns=(later, later))                    # same content, new modification time
     with pytest.raises(ValueError, match='inputs changed'):
         svc.update([point()], sid)
 
@@ -240,7 +331,8 @@ def test_publication_failure_does_not_commit_objects(session, monkeypatch):
     with pytest.raises(RuntimeError, match='publication'):
         svc.update([point()], sid)
     assert (folder/'map.qgz').read_bytes() == before
-    assert len(list(folder.glob('pet_*_filled.tif'))) == 1
+    assert len(list(folder.glob('pet_*.vrt'))) == 1
+    assert not list(folder.glob('patch_*.tif'))
 
 
 def test_same_session_updates_are_serialized(session, monkeypatch):
@@ -264,16 +356,7 @@ def test_same_session_updates_are_serialized(session, monkeypatch):
     assert maximum == 1
 
 
-def test_patch_changes_nodata_convention_without_touching_border(tmp_path):
-    source = tmp_path/'source.tif'
-    target = tmp_path/'target.tif'
-    raster(source, np.array([[20, -9999], [21, 22]], dtype='float32'))
-    raster(target, np.full((3, 3), 7, dtype='float32'), nodata=-8888)
-    LocalPETService._write_patch(target, source, RasterLayout.read(source).bounds)
-    np.testing.assert_array_equal(read(target), [[20, -8888, 7], [21, 22, 7], [7, 7, 7]])
-
-
-def test_separate_sessions_retain_independent_state(session):
+def test_separate_sessions_retain_independent_state(session, baseline):
     svc, sid, folder = session
     second_id = str(uuid.uuid4())
     second = svc.sessions/second_id
@@ -281,43 +364,15 @@ def test_separate_sessions_retain_independent_state(session):
     shutil.copyfile(folder/'map.qgz', second/'map.qgz')
     first = svc.update([point()], sid)
     untouched = svc.update([], second_id)
-    np.testing.assert_array_equal(read(untouched['output']), read(svc.root/'server/pet-version-1.tif'))
+    np.testing.assert_array_equal(read(untouched['output']), read(baseline))
     assert svc.update([point()], sid)['output'] == first['output']
 
 
-def test_reordered_overlapping_objects_are_recalculated(session, tmp_path):
+def test_reordered_overlapping_objects_are_recalculated(session, baseline, tmp_path):
     svc, sid, _ = session
     objects = [point(), point(id='tree-b', height=2)]
     first = svc.update(objects, sid)
     reordered = list(reversed(objects))
     second = svc.update(reordered, sid)
     assert len(second['updated_cells']) == 9
-    assert_matches_full(svc, second, reordered, tmp_path, first['output'])
-
-
-def test_scenario_refreshes_internal_overviews_without_changing_native_pixels(session,tmp_path):
-    service,sid,folder = session
-    original = service.root/'server/pet-version-1.tif'
-    baseline = tmp_path/'overview-baseline.tif'
-    shutil.copyfile(original,baseline)
-    raster = gdal.Open(str(baseline),gdal.GA_Update)
-    assert raster.BuildOverviews('AVERAGE',[2,4,8,16]) == 0
-    raster = None
-    with zipfile.ZipFile(folder/'map.qgz') as source:
-        xml = source.read('map.qgs').decode().replace(str(original),str(baseline))
-    with zipfile.ZipFile(folder/'map.qgz','w') as target:
-        target.writestr('map.qgs',xml)
-    for objects in ([point()],[]):
-        result = service.update(objects,sid)
-        raster = gdal.Open(result['output'],gdal.GA_Update)
-        band = raster.GetRasterBand(1)
-        assert band.GetOverviewCount() == 4
-        native = raster.ReadAsArray()
-        partial = [band.GetOverview(i).ReadAsArray() for i in range(4)]
-        assert raster.BuildOverviews('AVERAGE',[2,4,8,16]) == 0
-        np.testing.assert_array_equal(native,raster.ReadAsArray())
-        for i,values in enumerate(partial):
-            np.testing.assert_array_equal(values,band.GetOverview(i).ReadAsArray())
-        if not objects:
-            np.testing.assert_array_equal(native,read(baseline))
-        band = raster = None
+    assert_matches_full(svc, second, reordered, tmp_path, first['output'], baseline)

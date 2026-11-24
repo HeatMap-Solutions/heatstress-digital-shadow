@@ -1,9 +1,9 @@
 """One place for the Zeeland PET map settings: where the data is, and the fixed sun position.
 
 Everything that needs a data path reads it from here:
-  - tools/zeeland_tiles.py          (calculates the map, tile by tile)
-  - tools/zeeland_tiles_project.py  (publishes a run in the app)
-  - tools/zeeland_wind_grid.py      (wind grid for the 3x3 update)
+  - src/services/pet_map_service.py   (calculates the map, tile by tile; run with tools/generate_pet_map.py)
+  - tools/publish_pet_map.py          (publishes a run in the app)
+  - tools/build_wind_grid.py          (wind grid for the 3x3 update)
   - src/services/local_pet_service.py (the 3x3 update)
 To use other data, change it here and not in those files.
 
@@ -34,7 +34,7 @@ VEGETATION = INPUTS/'vegetation_zeeland_lgn2018_1m.tif'   # 0 = paved, 1 = veget
 # ---------- wind (from the wind team) ----------
 WIND = SOURCE/'sources/wind/zeeland-wind.gpkg'
 WIND_LAYER = 'wind_zeeland_land_candidate'
-WIND_GRID = SOURCE/'sources/wind/zeeland-wind-grid.geojson'   # made from WIND by tools/zeeland_wind_grid.py
+WIND_GRID = SOURCE/'sources/wind/zeeland-wind-grid.geojson'   # made from WIND by tools/build_wind_grid.py
 
 # ---------- publishing ----------
 STYLE = SERVER/'styles/new-default.qml'   # same continuous PET colour ramp as the original Middelburg map
