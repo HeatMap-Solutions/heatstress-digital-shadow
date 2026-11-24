@@ -1,81 +1,20 @@
-from fastapi import APIRouter
-from src.services.pet_service import PETService
-from src.services.raster_service import RasterService
-from src.services.shadow_service import ShadowService
-from src.services.geojson_service import GeoJSONService
-from datetime import datetime, timedelta
-from src.api.requests.placed_objects_request import PlacedObjectsRequest
-from src.services.local_pet_service import LocalPETService
 from typing import Optional
 
+from fastapi import APIRouter
+
+from src.api.requests.placed_objects_request import PlacedObjectsRequest
+from src.services.local_pet_service import LocalPETService
+
 router = APIRouter()
-pet_service = PETService()
-raster_service = RasterService()
-shadow_service = ShadowService()
-geojson_service = GeoJSONService()
 
-@router.get("/full-map-generation")
-def get_uhi_zone():
-    uhi = "/data/json/wind_reduction copy.geojson"
-    ref_path = "/data/dsm.TIF"
-    vegetation = "/data/raster/vegetation-reproject.tif"
-    svf = "/data/raster/svf-reproject.tif"
 
-    reference = raster_service.load_raster_layer(ref_path, "dsm")
-    vector = pet_service.load_zonal_layer(uhi)
-    
-    obj = geojson_service.calculate_wind_speed_1_2(vector) 
-    obj = pet_service.calculate_zonal_uhi(obj, vegetation, svf)
-    obj = pet_service.calculate_t_a_temperature(obj)
-    obj = pet_service.calculate_wet_bulb_temp(obj)
-
-    obj = pet_service.calculate_zonal_part_pet_sun(obj, "t_a", "t_w", "geschaalde_u_1_2")
-    obj = pet_service.calculate_zonal_part_pet_shadow(obj, "t_a", "t_w", "geschaalde_u_1_2")
-
-    result = raster_service.rasterize_vector_layer(obj, "pet_sun_partial", "/data/uhi/temp.tif")
-    raster_service.clip_raster_by_extent(result, reference, "/data/uhi/sun-bbox.tif")
-
-    result = raster_service.rasterize_vector_layer(obj, "pet_shadow_partial", "/data/uhi/temp.tif")
-    raster_service.clip_raster_by_extent(result, reference, "/data/uhi/shadow-bbox.tif")
-
-    raster_service.rasterize_vector_layer(obj, "t_a", "/data/uhi/t_a.tif")
-    raster_service.fill_nodata_gdal("/data/raster/svf-reproject.tif", "/data/raster/svf-reproject-filled.tif")
-
-    pet_service.calculate_total_pet_sun(
-        "/data/uhi/sun-bbox.tif",
-        "/data/raster/br-reproject.tif",
-        "/data/raster/svf-reproject-filled.tif",
-        "/data/uhi/sun-pet.tif",
-    )
-    pet_service.calculate_total_pet_shadow(
-        "/data/uhi/shadow-bbox.tif",
-        "/data/raster/svf-reproject-filled.tif",
-        "/data/uhi/t_a.tif",
-        "/data/uhi/shadow-pet.tif",
-    )
-
-    output_folder = "/data/shadow-maps"
-    lat, lon = 51.498, 3.613
-    start_dt = datetime(2015, 7, 1, 15, 0, 0)
-    end_dt = datetime(2015, 7, 1, 15, 0, 0)
-
-    shadow_service.generate_hillshade_maps(
-        ref_path, output_folder, lat, lon, start_dt, end_dt
-    )
-    
-    pet_service.calculate_total_pet_map(
-        "/data/shadow-maps/hillshade_20150701_1500.tif",
-        "/data/uhi/sun-pet.tif",
-        "/data/uhi/shadow-pet.tif",
-        "/data/pet/pet.tif",
-    )
-    
-    return {
-        "status": "success",
-        "message": "Map(s) generated successfully",
-    }
+@router.get("/status")
+def get_status():
+    """Polled by the frontend loading indicator (via the backend's /processing-status)."""
+    return {"message": "Idle"}
 
 
 @router.post("/update")
 def update_pet_scenario(req: PlacedObjectsRequest, session_id: Optional[str] = None):
+    """Recalculate the 3 x 3 wind cells around placed or changed objects for this session."""
     return LocalPETService().update(req.points, session_id)

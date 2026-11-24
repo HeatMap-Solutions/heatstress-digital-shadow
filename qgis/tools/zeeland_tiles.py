@@ -41,14 +41,13 @@ CELL_W, CELL_H = 140, 280
 ORIGIN_X, ORIGIN_Y = 2000, 427350   # NW of Zeeland, so tile numbers are positive
 WIND_PLACEHOLDER = 7.5          # geschaalde_u_1_2 (m/s): placeholder until the wind team delivers
 PAVED = [18, 19, 24, 25, 26, 27]  # LGN2018 classes treated as paved
-WATER = [16, 17]                  # LGN2018 water classes, masked out
 BOWEN_SOURCE = os.environ.get('BOWEN_SOURCE')            # optional prepared 1 m raster (e.g. bowen_zeeland_lgn2018_1m.tif) instead of the LGN rule
 VEGETATION_SOURCE = os.environ.get('VEGETATION_SOURCE')  # optional prepared 1 m raster (e.g. vegetation_zeeland_lgn2018_1m.tif) instead of the LGN rule
 WIND_SOURCE = os.environ.get('WIND_SOURCE')   # optional zeeland-wind.gpkg from the wind team; 7.5 m/s placeholder where it has no value
 WIND_LAYER = 'wind_zeeland_land_candidate'
 FF10 = 7.677                                  # wind at 10 m (KNMI), as in main's geojson_service.calculate_wind_speed_1_2
 
-# Defaults from main's /pet/full-map-generation and pet_service.py
+# Defaults from the original Middelburg pipeline (pet_service.py)
 T_MIN, T_MAX, AVERAGE_WIND = 27.2, 29.1, 7.5
 BASE_TEMPERATURE, UHI_DATETIME = 28.3, datetime(2017, 7, 1, 18, 0)
 RELATIVE_HUMIDITY, PHI, Q_GL, Q_DIFF = 44.0, 44.0, 663.0, 0.2
