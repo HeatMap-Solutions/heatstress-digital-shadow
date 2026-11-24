@@ -8,15 +8,19 @@ counting from north to south. The wind GeoPackage has the same cells, but clippe
 to land, with column_id/row_id and row_id counting from south to north. This
 script converts it; the wind values themselves are copied along as information.
 
-    python3 /app/tools/zeeland_wind_grid.py /data/zeeland/sources/wind/zeeland-wind.gpkg /data/server/zeeland-wind-grid.geojson
+    python3 /app/tools/zeeland_wind_grid.py        # paths from src/configs/area.py
 """
+
 import json
 from pathlib import Path
 import sys
 
 from osgeo import ogr
 
-LAYER = 'wind_zeeland_land_candidate'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.configs import area
+
+LAYER = area.WIND_LAYER
 CELL_W, CELL_H = 250, 125   # wind cell size in metres; column_id * 250 = left, row_id * 125 = bottom
 
 
@@ -52,7 +56,7 @@ def main(source, target):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (1, 3):
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2])
-    
+    source, target = (sys.argv[1], sys.argv[2]) if len(sys.argv) == 3 else (area.WIND, area.WIND_GRID)
+    main(str(source), str(target))

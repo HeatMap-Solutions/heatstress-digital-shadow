@@ -1,6 +1,5 @@
 """Recalculate selected wind-grid regions and publish a consistent session revision."""
 from dataclasses import dataclass
-from datetime import datetime
 import fcntl
 import hashlib
 import json
@@ -18,12 +17,12 @@ import numpy as np
 from osgeo import gdal, osr
 
 from src.api.models.point import Point
-from src.services.pet_service import PETService
 from src.services.raster_service import RasterService
 from src.services.scenario_grid import Bounds, ScenarioGrid
-from src.services.shadow_service import ShadowService
 from src.utils.update_qgis_project import update_pet_layer_in_project
 from src.utils.pet_tiles import build_overviews, build_vrt
+from src.configs import area
+from src.services import pet_formulas as pf
 
 
 STATE_FILE = 'pet-scenario.json'
@@ -32,8 +31,6 @@ ALGORITHM_VERSION = 1
 # nearest-neighbour resampling. Regression tests compare buffered vs full runs.
 PROCESSING_BUFFER_METERS = 16
 PATCH_NODATA = -9999.0   # same NoData as the tiles; NoData in a patch lets the shared map show through
-ZEELAND_RUN = 'zeeland-1m-3x3'
-
 
 @dataclass(frozen=True)
 class RasterLayout:
@@ -95,14 +92,21 @@ def normalise_points(points):
 
 
 class LocalPETService:
-    def __init__(self, data_root='/data', sessions_root=None):
-        self.root = Path(data_root)
-        self.sessions = Path(sessions_root) if sessions_root else self.root/'server/sessions'
-        run = self.root/'zeeland-tiles'/ZEELAND_RUN
-        self.grid_path = self.root/'zeeland/sources/wind/zeeland-wind-grid.geojson'   # from tools/zeeland_wind_grid.py
-        self.inputs = {
-            'dsm': self.root/'zeeland/acquisition-20261005/elevation-dsm/native.vrt',  # AHN3 0.5 m
-            'bowen': self.root/'zeeland-tiles/inputs/bowen_zeeland_lgn2018_1m.tif',
+    def __init__(self, sessions_root=None):
+        self.sessions = Path(sessions_root) if sessions_root else area.SERVER/'sessions'
+        self.grid_path = area.WIND_GRID           # from tools/zeeland_wind_grid.py
+        self.inputs = None                        # set per update from the published run, see _inputs_for()
+
+    @staticmethod
+    def _inputs_for(baseline):
+        """Inputs of the published run: /data/server/<run>.vrt -> /data/zeeland-tiles/<run>/.
+
+        The 3x3 therefore always uses the same run as the map in the app.
+        """
+        run = area.RUNS/Path(baseline).stem
+        return {
+            'dsm': area.DSM,
+            'bowen': area.BOWEN,
             'svf': run/'svf.vrt',
             'sun': run/'sun-partial.vrt',
             'shadow': run/'shadow-pet.vrt',
@@ -157,19 +161,15 @@ class LocalPETService:
                                          sameHeight=True, workspace=str(directory))
         timings['objects'] = time.perf_counter()-stage
         stage = time.perf_counter()
-        pet = PETService()
-        sun = str(directory/'sun-pet.tif')
-        pet.calculate_total_pet_sun(paths['sun'], paths['bowen'], paths['svf'], sun, exact_grid=True)
+        values = {name: self._read_values(paths[name]) for name in ('sun', 'bowen', 'svf', 'shadow')}
+        sun_pet = pf.total_pet_sun(values['sun'], values['bowen'], values['svf'])
         timings['sun_pet'] = time.perf_counter()-stage
         stage = time.perf_counter()
-        dt = datetime(2015, 7, 1, 15)
-        shadow = ShadowService().generate_hillshade_maps(paths['dsm'], str(directory),
-                                                         51.498, 3.613, dt, dt)
+        shade = pf.hillshade(paths['dsm'], bounds, layouts['sun'].transform[1])
         timings['hillshade'] = time.perf_counter()-stage
         stage = time.perf_counter()
         raw, filled = str(directory/'pet.tif'), str(directory/'pet-filled.tif')
-        pet.calculate_total_pet_map(shadow, sun, paths['shadow'], raw,
-                                    workspace=str(directory), exact_grid=True)
+        self._write_values(raw, pf.combine(sun_pet, values['shadow'], shade), template=paths['sun'])
         raster.fill_nodata_gdal(raw, filled)
         timings['combine_and_fill'] = time.perf_counter()-stage
         if RasterLayout.read(filled).bounds != bounds:
@@ -210,8 +210,9 @@ class LocalPETService:
             return self._update_locked(points, project, started)
 
     def _update_locked(self, points, project, started):
-        current = normalise_points(points)
-        state, baseline = self._read_project(project)
+        current = normalise_points(points)   
+        state, baseline = self._read_project(project)     
+        self.inputs = self._inputs_for(baseline)
         signature = self._signature(baseline)
         if state and state['signature'] != signature:
             raise ValueError('Calculation inputs changed; initialize a new session before saving')
@@ -332,6 +333,30 @@ class LocalPETService:
         target.FlushCache()
         source = target = None
 
+    @staticmethod
+    def _read_values(path):
+        """Band 1 of a raster as a float32 numpy array, NaN where NoData."""
+        ds = gdal.Open(str(path))
+        band = ds.GetRasterBand(1)
+        values = band.ReadAsArray().astype('float32')
+        nodata = band.GetNoDataValue()
+        if nodata is not None:
+            values[values == nodata] = np.nan
+        ds = None
+        return values
+
+    @staticmethod
+    def _write_values(path, values, template):
+        """Write a numpy array (NaN = NoData) as a GeoTIFF on the pixel grid of `template`."""
+        source = gdal.Open(str(template))
+        target = gdal.GetDriverByName('GTiff').Create(str(path), source.RasterXSize, source.RasterYSize,
+                                                      1, gdal.GDT_Float32)
+        target.SetGeoTransform(source.GetGeoTransform())
+        target.SetProjection(source.GetProjection())
+        band = target.GetRasterBand(1)
+        band.SetNoDataValue(PATCH_NODATA)
+        band.WriteArray(np.where(np.isnan(values), PATCH_NODATA, values).astype('float32'))
+        target = source = None
 
     @staticmethod
     def _write_patch_file(patch, core, path, baseline):

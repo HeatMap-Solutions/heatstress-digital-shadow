@@ -13,9 +13,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.configs.preflight import init_qgis
 from src.utils.pet_tiles import build_vrt
+from src.configs import area
 
-SERVER = Path('/data/server')
-STYLE = SERVER/'styles'/'new-default.qml'
+SERVER = area.SERVER
+STYLE = area.STYLE
 
 
 def main(vrt):

@@ -6,12 +6,13 @@ edges match their neighbours. Intermediate rasters stay in memory and only the
 tile's final PET is written, so memory and working disk depend on the tile
 size, not on the size of Zeeland. A VRT joins the tiles into one map.
 
-The PET formulas are the ones in src/services/pet_service.py (main). Because the
-zones are grid cells that line up with the pixels, the zonal means and the
-rasterisation are done with numpy instead of QGIS vector round trips.
+The PET formulas are in src/services/pet_formulas.py, shared with the 3x3 update.
+Because the zones are grid cells that line up with the pixels, the zonal means
+are done with numpy instead of QGIS vector round trips.
 
-    python3 tools/zeeland_tiles.py --resolution 2 --out /out/pilot-2m-tiled --bbox 30000,388150,35600,393750
-    python3 tools/zeeland_tiles.py --resolution 1 --out /out/zeeland-1m        # all of Zeeland
+Data paths (sources, Bowen/vegetation, wind): src/configs/area.py
+    python3 tools/zeeland_tiles.py --resolution 1 --out /data/zeeland-tiles/pilot --bbox 30000,388150,35600,393750
+    python3 tools/zeeland_tiles.py --resolution 1 --out /data/zeeland-tiles/zeeland-1m   # all of Zeeland
 """
 import argparse
 from dataclasses import dataclass
@@ -30,31 +31,14 @@ from osgeo import gdal, ogr, osr
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.utils.pet_tiles import TILE_OPTIONS, build_overviews, build_vrt
-from src.utils.solar_position import get_solar_position
-from src.utils.uhi_lookup_tables import UHILookupTables
+from src.configs import area
+from src.services import pet_formulas as pf
 
-SOURCE = Path(os.environ.get('ZEELAND_SOURCE', '/data/zeeland'))
 NODATA = -9999.0
 
 # Zone grid: 140 x 280 m cells on a fixed lattice (same cell size and lattice as the 2 m run).
 CELL_W, CELL_H = 140, 280
 ORIGIN_X, ORIGIN_Y = 2000, 427350   # NW of Zeeland, so tile numbers are positive
-WIND_PLACEHOLDER = 7.5          # geschaalde_u_1_2 (m/s): placeholder until the wind team delivers
-PAVED = [18, 19, 24, 25, 26, 27]  # LGN2018 classes treated as paved
-BOWEN_SOURCE = os.environ.get('BOWEN_SOURCE')            # optional prepared 1 m raster (e.g. bowen_zeeland_lgn2018_1m.tif) instead of the LGN rule
-VEGETATION_SOURCE = os.environ.get('VEGETATION_SOURCE')  # optional prepared 1 m raster (e.g. vegetation_zeeland_lgn2018_1m.tif) instead of the LGN rule
-WIND_SOURCE = os.environ.get('WIND_SOURCE')   # optional zeeland-wind.gpkg from the wind team; 7.5 m/s placeholder where it has no value
-WIND_LAYER = 'wind_zeeland_land_candidate'
-FF10 = 7.677                                  # wind at 10 m (KNMI), as in main's geojson_service.calculate_wind_speed_1_2
-
-# Defaults from the original Middelburg pipeline (pet_service.py)
-T_MIN, T_MAX, AVERAGE_WIND = 27.2, 29.1, 7.5
-BASE_TEMPERATURE, UHI_DATETIME = 28.3, datetime(2017, 7, 1, 18, 0)
-RELATIVE_HUMIDITY, PHI, Q_GL, Q_DIFF = 44.0, 44.0, 663.0, 0.2
-SHADOW_DATETIME, LAT, LON = datetime(2015, 7, 1, 15, 0), 51.498, 3.613
-SHADOW_THRESHOLD = 127
-BOLTZMANN = 5.670374419e-8
-
 
 @dataclass(frozen=True)
 class Box:
@@ -78,13 +62,13 @@ def svf_vrt(out_dir):
     target = out_dir/'svf-sources.vrt'
     if target.exists():
         return target
-    manifest = json.loads((SOURCE/'sources/svf-nl-3/manifest.json').read_text())
+    manifest = json.loads(area.SVF_MANIFEST.read_text())
     paths = []
     for entry in manifest['files']:
         recorded = entry['local_path'].replace('\\', '/')
         for prefix in ('/data/zeeland/', 'data/zeeland/'):
             if recorded.startswith(prefix):
-                recorded = str(SOURCE/recorded[len(prefix):])
+                recorded = str(area.SOURCE/recorded[len(prefix):])
                 break
         if not Path(recorded).is_file():
             raise FileNotFoundError(f'SVF source from the manifest is missing: {recorded}')
@@ -131,8 +115,7 @@ def boundary_mask(boundary_layer, bounds, resolution):
     return ds.GetRasterBand(1).ReadAsArray() == 1
 
 
-# ---------- per-cell (zonal) part: formulas from pet_service.py ----------
-
+# ---------- per-cell (zonal) part ----------
 def cell_means(values, resolution):
     """Mean of each 140 x 280 m cell, ignoring NoData (what QgsZonalStatistics computes for these cells)."""
     cw, ch = round(CELL_W/resolution), round(CELL_H/resolution)
@@ -148,40 +131,30 @@ def to_pixels(cells, resolution):
     return np.repeat(np.repeat(cells, ch, axis=0), cw, axis=1)
 
 def wind_cells(work, resolution):
-    """Wind at 1.2 m (m/s) per zone cell from WIND_SOURCE; the placeholder where no calculated value exists."""
+    """Wind at 1.2 m (m/s) per zone cell from area.WIND; the placeholder where no calculated value exists."""    
     rows = round((work.top-work.bottom)/resolution)
     cols = round((work.right-work.left)/resolution)
-    if not WIND_SOURCE:
-        return np.full((rows//round(CELL_H/resolution), cols//round(CELL_W/resolution)), WIND_PLACEHOLDER, dtype='float32')
-    source = ogr.Open(WIND_SOURCE)
-    layer = source.GetLayerByName(WIND_LAYER)
+    source = ogr.Open(str(area.WIND))
+    if source is None:
+        raise FileNotFoundError(f'Wind file not found: {area.WIND}')
+    layer = source.GetLayerByName(area.WIND_LAYER)
     layer.SetAttributeFilter("quality = 'model_value' AND u_1_2 > 0")   # skip the legacy zeros
     layer.SetSpatialFilterRect(work.left, work.bottom, work.right, work.top)
     target = to_gdal(np.full((rows, cols), np.nan, dtype='float32'), work, resolution)
     gdal.RasterizeLayer(target, [1], layer, options=['ATTRIBUTE=u_1_2'])
     u_factor = target.GetRasterBand(1).ReadAsArray().astype('float32')
     u_factor[u_factor == NODATA] = np.nan
-    speed = FF10 * ((u_factor - 0.0796) * 0.9175 + 0.1254)              # geschaalde_u_1_2, as in main
-    speed = np.where(speed < 0.5, FF10 - speed, speed)
+    speed = pf.wind_speed_1_2(u_factor)                                 # geschaalde_u_1_2, as in main
     u = cell_means(speed, resolution)                                   # 250 x 125 m wind cells -> 140 x 280 m zone cells
     source = None
-    return np.where(np.isfinite(u) & (u > 0), u, WIND_PLACEHOLDER).astype('float32')
+    return np.where(np.isfinite(u) & (u > 0), u, pf.WIND_PLACEHOLDER).astype('float32')
 
 def zonal_partial_pet(vegetation, svf_raw, resolution, u):
-    """calculate_zonal_uhi -> calculate_t_a_temperature -> calculate_wet_bulb_temp -> partial PET sun/shadow."""
-    svf_mean, veg_mean = cell_means(svf_raw, resolution), cell_means(vegetation, resolution)
-    base = ((663 * (T_MAX-T_MIN)**3) / AVERAGE_WIND) ** 0.25
-    uhi = (2 - svf_mean - veg_mean) * base
-    t_a = BASE_TEMPERATURE + uhi * UHILookupTables.get_uhi_factor(UHI_DATETIME)
-    r_h = RELATIVE_HUMIDITY
-    t_w = (t_a * math.atan(0.151977 * math.sqrt(r_h + 8.313659)) + np.arctan(t_a + r_h)
-           - math.atan(r_h - 1.676331) + 0.00391838 * r_h**1.5 * math.atan(0.023101 * r_h) - 4.686035)
-    log_u = np.log(u)                      # u: wind per cell (array) from wind_cells()
-    sun = (-13.26 + 1.25*t_a + 0.011*Q_GL - 3.37*log_u + 0.078*t_w
-           + 0.0055*Q_GL*log_u + 5.56*math.sin(PHI) - 0.0103*Q_GL*log_u*math.sin(PHI))
-    shadow = -12.14 + 1.25*t_a - 1.47*log_u + 0.060*t_w
+    """Per zone cell: air temperature, wet bulb and the partial PET in sun and shade (see pet_formulas)."""
+    t_a = pf.air_temperature(cell_means(svf_raw, resolution), cell_means(vegetation, resolution))
+    t_w = pf.wet_bulb_temperature(t_a)
+    sun, shadow = pf.partial_pet_sun(t_a, t_w, u), pf.partial_pet_shadow(t_a, t_w, u)
     return to_pixels(sun, resolution), to_pixels(shadow, resolution), to_pixels(t_a, resolution)
-
 
 # ---------- one tile ----------
 
@@ -195,47 +168,23 @@ def fill_nodata(values, bounds, resolution, distance_px):
     return filled
 
 
-def hillshade(dsm, bounds, dsm_resolution, pet_resolution):
-    """gdal:hillshade as in shadow_service.py, then aligned to the PET grid with nearest neighbour."""
-    azimuth, altitude = get_solar_position(LAT, LON, 'Middelburg', 'Netherlands', 'Europe/Amsterdam', SHADOW_DATETIME)
-    shade = gdal.DEMProcessing('', to_gdal(dsm, bounds, dsm_resolution), 'hillshade', format='MEM',
-                               zFactor=1.0, azimuth=azimuth, altitude=altitude, computeEdges=False)
-    aligned = gdal.Warp('', shade, format='MEM', xRes=pet_resolution, yRes=pet_resolution,
-                        outputBounds=(bounds.left, bounds.bottom, bounds.right, bounds.top), resampleAlg='near')
-    band = aligned.GetRasterBand(1)
-    values = band.ReadAsArray().astype('float32')
-    nodata = band.GetNoDataValue()
-    if nodata is not None:
-        values[values == nodata] = np.nan
-    return values
-
-
 def calculate_tile(tile, resolution, boundary_layer, svf_source, path):
     """Calculate one tile (plus halo) and write only the tile itself to `path`."""
     work = tile.expand(CELL_W, CELL_H)                    # one grid cell of context on every side
     dsm_resolution = resolution / 2                       # elevation at twice the PET detail, as main and the 2 m run do
-    classes = warp(f'/vsizip/{SOURCE}/sources/lgn2018/LGN2018.zip/LGN2018/LGN2018.tif', work, resolution, 'near', gdal.GDT_Int16)
-    land = np.isfinite(classes) & (classes > 0)
-    paved = np.isin(classes, PAVED)
-    if BOWEN_SOURCE:
-        bowen = np.where(land, warp(BOWEN_SOURCE, work, resolution, 'near'), np.nan).astype('float32')
-    else:
-        bowen = np.where(land, np.where(paved, 3.0, 0.4), np.nan).astype('float32')        # same rule as the 2 m run
-    if VEGETATION_SOURCE:
-        vegetation = np.where(land, warp(VEGETATION_SOURCE, work, resolution, 'average'), np.nan).astype('float32')
-    else:
-        vegetation = np.where(land, np.where(paved, 0.0, 1.0), np.nan).astype('float32')
+    classes = warp(area.LGN, work, resolution, 'near', gdal.GDT_Int16)
+    land = np.isfinite(classes) & (classes > 0)                                             # LGN: only the land mask
+    bowen = np.where(land, warp(area.BOWEN, work, resolution, 'near'), np.nan).astype('float32')
+    vegetation = np.where(land, warp(area.VEGETATION, work, resolution, 'average'), np.nan).astype('float32')
     svf_raw = warp(svf_source, work, resolution, 'average')
     svf = fill_nodata(svf_raw, work, resolution, distance_px=max(1, round(10/resolution)))  # 10 m search
-    dsm = warp(SOURCE/'acquisition-20261005/elevation-dsm/native.vrt', work, dsm_resolution, 'average')
+    dsm = warp(area.DSM, work, dsm_resolution, 'average')
 
     sun_partial, shadow_partial, t_a = zonal_partial_pet(vegetation, svf_raw, resolution, wind_cells(work, resolution))
-    sun_pet = sun_partial + 0.546*bowen + 1.94*svf                                         # calculate_total_pet_sun
-    shadow_pet = (shadow_partial + 0.015*svf*Q_DIFF
-                  + 0.0060*(1-svf)*BOLTZMANN*((t_a+273.15)**4))                            # calculate_total_pet_shadow
-    shade = hillshade(dsm, work, dsm_resolution, resolution)
-    pet = np.where(shade > SHADOW_THRESHOLD, sun_pet, shadow_pet)                          # calculate_total_pet_map
-    pet[np.isnan(shade)] = np.nan
+    sun_pet = pf.total_pet_sun(sun_partial, bowen, svf)
+    shadow_pet = pf.total_pet_shadow(shadow_partial, svf, t_a)
+    shade = pf.hillshade(to_gdal(dsm, work, dsm_resolution), work, resolution)
+    pet = pf.combine(sun_pet, shadow_pet, shade)
 
     # Keep only the tile (drop the halo) and mask what is not supported land in Zeeland.
     hx, hy = round(CELL_W/resolution), round(CELL_H/resolution)
@@ -307,7 +256,7 @@ def main():
 
     out, tiles_dir = args.out, args.out/'tiles'
     tiles_dir.mkdir(parents=True, exist_ok=True)
-    boundary = ogr.Open(str(SOURCE/'boundary/zeeland-rd.gpkg'))
+    boundary = ogr.Open(str(area.BOUNDARY))
     layer = boundary.GetLayer()
     bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else None
     tiles = tile_list(layer, args.tile_m, bbox)
@@ -316,8 +265,8 @@ def main():
     report_path = out/'report.json'
     report = json.loads(report_path.read_text()) if report_path.exists() else {
         'resolution_m': args.resolution, 'tile_m': args.tile_m, 'bbox': bbox,
-        'wind_placeholder_m_s': WIND_PLACEHOLDER, 'wind_source': WIND_SOURCE,
-        'bowen_source': BOWEN_SOURCE, 'vegetation_source': VEGETATION_SOURCE, 'tiles': {}}
+        'wind_placeholder_m_s': pf.WIND_PLACEHOLDER, 'wind_source': str(area.WIND),
+        'bowen_source': str(area.BOWEN), 'vegetation_source': str(area.VEGETATION), 'tiles': {}}
     if (report['resolution_m'], report['tile_m']) != (args.resolution, args.tile_m):
         raise SystemExit(f'{out} holds a {report["resolution_m"]} m / {report["tile_m"]} m run; use a new --out folder')
     print(f'{len(tiles)} tiles with land, {len(report["tiles"])} already done', flush=True)
