@@ -42,3 +42,10 @@ STYLE = SERVER/'styles/new-default.qml'   # same continuous PET colour ramp as t
 # ---------- sun position for the shadows (same moment for the map and the 3x3 update) ----------
 SHADOW_DATETIME = datetime(2015, 7, 1, 15, 0)
 LAT, LON = 51.498, 3.613
+
+# Reference maps to compare with (tools/compare_hittestresskaart.py): the province's GeoServer, in RD New.
+REFERENCE_WMS = 'https://opengeodata.zeeland.nl/geoserver/{workspace}/wms'
+REFERENCE_LAYERS = {
+    'klimaat:Hittestress_1_juli_2015': 'PET hittekaart Zeeland, TAUW 2023, weather of 1 July 2015 (same day as our model)',
+    'rasters:geokma_httstrkrtrst': 'PET hittekaart Provincie Zeeland (Hittestresskaart in the dataportaal)',
+}
